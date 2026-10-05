@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#f6f4ef" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#16181d" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Sudoku">
+  <title>Sudoku Together</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- Home -->
+    <section class="screen" id="screen-home">
+      <div class="home">
+        <h1 class="logo">Sudoku <span>Together</span></h1>
+        <label class="field">
+          <span>Your name</span>
+          <input id="name-input" maxlength="16" autocomplete="off" placeholder="Player">
+        </label>
+        <div id="resume-box" class="resume hidden">
+          <button class="btn primary" id="btn-resume"></button>
+          <button class="btn link" id="btn-discard">Discard</button>
+        </div>
+        <div class="stack">
+          <button class="btn primary" data-go="solo">Play solo</button>
+          <button class="btn" data-go="host">Host a 2‑player game</button>
+          <button class="btn" data-go="join">Join a game</button>
+        </div>
+        <p class="hint">Two players: one person taps <b>Host</b> and reads out the 4‑letter code, the other taps <b>Join</b> and types it in.</p>
+      </div>
+    </section>
+
+    <!-- Setup (solo + host) -->
+    <section class="screen hidden" id="screen-setup">
+      <header class="topbar">
+        <button class="icon-btn" data-back aria-label="Back">‹</button>
+        <h2 id="setup-title">New game</h2>
+        <span></span>
+      </header>
+      <div class="panel">
+        <div id="host-code-box" class="code-box hidden">
+          <div class="code-label">Game code</div>
+          <div class="code" id="host-code">····</div>
+          <div class="status" id="host-status">Setting up…</div>
+        </div>
+
+        <div id="mode-group" class="group hidden">
+          <div class="group-label">Mode</div>
+          <div class="choice" id="mode-choice">
+            <button data-value="race" class="selected">
+              <b>Race</b>
+              <small>Same puzzle, your own boards. First to finish wins.</small>
+            </button>
+            <button data-value="shared">
+              <b>Shared board</b>
+              <small>One board together. Score the number you place; mistakes cost that much.</small>
+            </button>
+          </div>
+        </div>
+
+        <div class="group">
+          <div class="group-label">Difficulty</div>
+          <div class="seg" id="difficulty-choice">
+            <button data-value="easy">Easy</button>
+            <button data-value="medium" class="selected">Medium</button>
+            <button data-value="hard">Hard</button>
+            <button data-value="expert">Expert</button>
+          </div>
+        </div>
+
+        <div class="group" id="mistake-group">
+          <label class="toggle">
+            <input type="checkbox" id="mistake-toggle" checked>
+            <span class="track"></span>
+            <span class="toggle-text">
+              <b>Show mistakes</b>
+              <small id="mistake-help">Wrong numbers turn red straight away.</small>
+            </span>
+          </label>
+        </div>
+
+        <button class="btn primary big" id="btn-start">Start</button>
+      </div>
+    </section>
+
+    <!-- Join -->
+    <section class="screen hidden" id="screen-join">
+      <header class="topbar">
+        <button class="icon-btn" data-back aria-label="Back">‹</button>
+        <h2>Join a game</h2>
+        <span></span>
+      </header>
+      <div class="panel">
+        <label class="field">
+          <span>Game code</span>
+          <input id="join-code" class="code-input" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD">
+        </label>
+        <button class="btn primary big" id="btn-join">Join</button>
+        <div class="status" id="join-status"></div>
+      </div>
+    </section>
+
+    <!-- Game -->
+    <section class="screen hidden" id="screen-game">
+      <header class="topbar">
+        <button class="icon-btn" id="btn-leave" aria-label="Menu">‹</button>
+        <h2 id="game-title">Sudoku</h2>
+        <span class="timer" id="timer">0:00</span>
+      </header>
+
+      <div class="scorebar" id="scorebar"></div>
+
+      <div class="board-wrap">
+        <div class="board" id="board"></div>
+      </div>
+
+      <div class="tools">
+        <button class="tool" id="tool-undo"><span class="ti">↶</span>Undo</button>
+        <button class="tool" id="tool-erase"><span class="ti">⌫</span>Erase</button>
+        <button class="tool" id="tool-notes"><span class="ti">✎</span>Notes <em id="notes-state">off</em></button>
+        <button class="tool" id="tool-check"><span class="ti">✓</span>Mistakes <em id="check-state">on</em></button>
+        <button class="tool" id="tool-hint"><span class="ti">💡</span>Hint</button>
+      </div>
+
+      <div class="numpad" id="numpad"></div>
+    </section>
+
+    <div class="banner hidden" id="conn-banner">
+      <span id="conn-text">Connection lost</span>
+      <button class="btn small" id="btn-reconnect">Reconnect</button>
+    </div>
+
+    <div class="modal hidden" id="modal">
+      <div class="modal-card">
+        <h3 id="modal-title"></h3>
+        <div id="modal-body"></div>
+        <div class="modal-actions" id="modal-actions"></div>
+      </div>
+    </div>
+
+    <div class="toast hidden" id="toast"></div>
+  </div>
+
+  <script src="vendor/peerjs.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
