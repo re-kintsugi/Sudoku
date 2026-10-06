@@ -216,6 +216,8 @@ button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulat
 .num.done { opacity: 0.25; }
 .num.hl { background: var(--same); }
 .numpad.notes-mode .num b { font-size: 18px; color: var(--muted); }
+.numpad.notes-mode .num.armed { background: var(--me); }
+.numpad.notes-mode .num.armed b, .numpad.notes-mode .num.armed small { color: #fff; }
 
 /* ---------- Overlays ---------- */
 .banner {

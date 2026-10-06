@@ -212,6 +212,7 @@ function render() {
     const left = 9 - counts[d];
     b.classList.toggle('done', left <= 0);
     b.classList.toggle('hl', d === hd);
+    b.classList.toggle('armed', d === notesArmed());
     b.querySelector('small').textContent = left > 0 ? left : '';
   });
   // tools
@@ -294,27 +295,48 @@ function flash(i, kind, ghost) {
 function selectCell(i) {
   const g = S.game;
   if (!g) return;
+  // Notes mode with a number picked up: tapping empty squares toggles that note.
+  const armed = notesArmed();
+  if (armed && !g.values[i]) {
+    if (g.finished) return;
+    toggleNote(i, armed);
+    afterChange();
+    return;
+  }
   S.sel = i;
   S.hlDigit = g.values[i] || 0;
   if (g.mode === 'shared') send({ t: 'cursor', i });
   render();
 }
 
+// The number picked up in notes mode (tap a number with no square selected).
+function notesArmed() {
+  return S.notesMode && S.sel < 0 ? S.hlDigit : 0;
+}
+
+function toggleNote(i, d) {
+  const g = S.game;
+  g.history.push({ i, v: 0, n: g.notes[i] });
+  g.notes[i] ^= 1 << d;
+}
+
 function tapNumber(d) {
   const g = S.game;
   if (!g || g.finished) return;
   const i = S.sel;
-  if (i < 0) { S.hlDigit = S.hlDigit === d ? 0 : d; render(); return; }
-  if (isLocked(i)) { S.hlDigit = d; render(); return; }
-
   if (S.notesMode) {
-    if (g.values[i]) return;
-    g.history.push({ i, v: 0, n: g.notes[i] });
-    g.notes[i] ^= 1 << d;
+    // Tapping the picked-up number again puts it down.
+    if (i < 0 && S.hlDigit === d) { S.hlDigit = 0; render(); return; }
+    // A selected empty square gets the note too, then the number stays picked up.
+    if (i >= 0 && !g.values[i]) toggleNote(i, d);
+    S.sel = -1;
     S.hlDigit = d;
+    if (g.mode === 'shared') send({ t: 'cursor', i: -1 });
     afterChange();
     return;
   }
+  if (i < 0) { S.hlDigit = S.hlDigit === d ? 0 : d; render(); return; }
+  if (isLocked(i)) { S.hlDigit = d; render(); return; }
 
   if (g.mode === 'shared') {
     if (S.role === 'host') hostPlace(i, d, 'host');
@@ -357,8 +379,10 @@ function undo() {
   g.notes[h.i] = h.n;
   // put back the pencil marks that placing the number cleared
   if (h.peers) for (const p of h.peers) g.notes[p] |= 1 << h.placed;
-  S.sel = h.i;
-  S.hlDigit = g.values[h.i] || 0;
+  if (!notesArmed()) {
+    S.sel = h.i;
+    S.hlDigit = g.values[h.i] || 0;
+  }
   afterChange();
 }
 
@@ -991,7 +1015,14 @@ function wire() {
 
   $('tool-undo').addEventListener('click', undo);
   $('tool-erase').addEventListener('click', erase);
-  $('tool-notes').addEventListener('click', () => { S.notesMode = !S.notesMode; render(); });
+  $('tool-notes').addEventListener('click', () => {
+    S.notesMode = !S.notesMode;
+    if (S.notesMode && !S.notesTipShown) {
+      S.notesTipShown = true;
+      toast('Tap a number, then tap squares to pencil it in');
+    }
+    render();
+  });
   $('tool-hint').addEventListener('click', hint);
   $('tool-check').addEventListener('click', () => {
     const g = S.game;

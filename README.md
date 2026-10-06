@@ -6,7 +6,10 @@ It's a plain static website with no build step, no accounts and no server of its
 ## Features
 
 - Puzzles generated in the browser (Easy / Medium / Hard / Expert), each with exactly one solution
-- **Notes** (pencil marks). Placing a number clears that pencil mark from its row, column and box
+- **Notes** (pencil marks). With Notes on, tap a number to pick it up (it highlights everywhere),
+  then tap each empty square to add or remove that note. Tap the number again to put it down.
+  Tapping a square first and then a number also works.
+  Placing a number clears that pencil mark from its row, column and box.
 - **Highlighting**: tap a cell to highlight its row, column and box, and every cell with the same number.
   With no cell selected, tap a number on the pad to highlight that number on the board.
 - **Show mistakes** toggle: when it's on, wrong numbers turn red and are counted.
