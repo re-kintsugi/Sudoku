@@ -1059,7 +1059,9 @@ function wire() {
   // Tapping outside the board clears the selection.
   document.addEventListener('pointerdown', (e) => {
     if (S.screen !== 'game' || !S.game) return;
-    if (e.target.closest('.board, .numpad, .tools, .modal, .banner, .topbar')) return;
+    // Use the path captured when the tap started: re-rendering a cell can detach e.target.
+    const inside = e.composedPath().some((el) => el instanceof Element && el.matches('.board, .numpad, .tools, .modal, .banner, .topbar'));
+    if (inside) return;
     S.sel = -1; S.hlDigit = 0;
     if (S.game.mode === 'shared') send({ t: 'cursor', i: -1 });
     render();
