@@ -155,7 +155,7 @@ button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulat
 
 .board-wrap { display: flex; justify-content: center; }
 .board {
-  --size: min(calc(100vw - 24px), 496px, calc(100dvh - 330px));
+  --size: min(calc(100vw - 24px), 496px, calc(100dvh - 390px));
   width: var(--size); height: var(--size);
   min-width: 270px; min-height: 270px;
   display: grid; grid-template-columns: repeat(9, 1fr); grid-template-rows: repeat(9, 1fr);
@@ -215,9 +215,16 @@ button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulat
 .num small { font-size: 11px; color: var(--muted); }
 .num.done { opacity: 0.25; }
 .num.hl { background: var(--same); }
-.numpad.notes-mode .num b { font-size: 18px; color: var(--muted); }
-.numpad.notes-mode .num.armed { background: var(--me); }
-.numpad.notes-mode .num.armed b, .numpad.notes-mode .num.armed small { color: #fff; }
+.pad-label { font-size: 12px; color: var(--muted); font-weight: 600; margin: 0 0 4px 2px; }
+.notepad { margin-bottom: 8px; }
+.num.note {
+  display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr);
+  padding: 4px 5px; height: 42px; align-items: center; justify-items: center;
+}
+.num.note b { font-size: 12px; font-weight: 700; color: var(--muted); line-height: 1; }
+.num.armed { background: var(--me); }
+.num.armed b, .num.armed small { color: #fff; }
+.num.armed.done { opacity: 1; }
 
 /* ---------- Overlays ---------- */
 .banner {

@@ -24,7 +24,7 @@ const S = {
   game: null,
   sel: -1,
   hlDigit: 0,
-  notesMode: false,
+  pick: null,          // number picked up from a pad: { d, mode: 'num' | 'note' }
   oppCursor: -1,
   screen: 'home',
   lastTick: 0,
@@ -157,13 +157,19 @@ function buildBoard() {
     board.appendChild(c);
     cells.push(c);
   }
-  const pad = $('numpad');
   for (let d = 1; d <= 9; d++) {
     const b = document.createElement('button');
     b.className = 'num';
     b.innerHTML = `<b>${d}</b><small></small>`;
-    b.addEventListener('pointerdown', (e) => { e.preventDefault(); tapNumber(d); });
-    pad.appendChild(b);
+    b.addEventListener('pointerdown', (e) => { e.preventDefault(); tapNumber(d, 'num'); });
+    $('numpad').appendChild(b);
+
+    // Notes buttons show the digit where it sits in a pencil-mark grid.
+    const n = document.createElement('button');
+    n.className = 'num note';
+    n.innerHTML = `<b style="grid-row:${Math.floor((d - 1) / 3) + 1};grid-column:${(d - 1) % 3 + 1}">${d}</b>`;
+    n.addEventListener('pointerdown', (e) => { e.preventDefault(); tapNumber(d, 'note'); });
+    $('notepad').appendChild(n);
   }
 }
 
@@ -205,19 +211,21 @@ function render() {
   // number pad
   const counts = new Array(10).fill(0);
   for (let i = 0; i < 81; i++) if (g.values[i] && (!g.check || g.values[i] === g.solution[i])) counts[g.values[i]]++;
-  const pad = $('numpad');
-  pad.classList.toggle('notes-mode', S.notesMode);
-  pad.querySelectorAll('.num').forEach((b, k) => {
+  const pk = S.pick;
+  $('numpad').querySelectorAll('.num').forEach((b, k) => {
     const d = k + 1;
     const left = 9 - counts[d];
     b.classList.toggle('done', left <= 0);
-    b.classList.toggle('hl', d === hd);
-    b.classList.toggle('armed', d === notesArmed());
+    b.classList.toggle('hl', d === hd && !pk);
+    b.classList.toggle('armed', !!pk && pk.mode === 'num' && pk.d === d);
     b.querySelector('small').textContent = left > 0 ? left : '';
   });
+  $('notepad').querySelectorAll('.num').forEach((b, k) => {
+    const d = k + 1;
+    b.classList.toggle('done', 9 - counts[d] <= 0);
+    b.classList.toggle('armed', !!pk && pk.mode === 'note' && pk.d === d);
+  });
   // tools
-  $('tool-notes').classList.toggle('on', S.notesMode);
-  $('notes-state').textContent = S.notesMode ? 'on' : 'off';
   $('check-state').textContent = g.check ? 'on' : 'off';
   $('tool-check').classList.toggle('on', g.check);
   $('tool-check').disabled = g.mode !== 'solo';
@@ -295,12 +303,22 @@ function flash(i, kind, ghost) {
 function selectCell(i) {
   const g = S.game;
   if (!g) return;
-  // Notes mode with a number picked up: tapping empty squares toggles that note.
-  const armed = notesArmed();
-  if (armed && !g.values[i]) {
-    if (g.finished) return;
-    toggleNote(i, armed);
-    afterChange();
+  const pk = S.pick;
+  if (pk && !g.finished) {
+    if (isLocked(i)) {
+      // Tapping a filled square switches the picked-up number to that one.
+      pk.d = g.values[i];
+      S.hlDigit = pk.d;
+      render();
+      return;
+    }
+    if (pk.mode === 'note') {
+      if (g.values[i]) return;
+      toggleNote(i, pk.d);
+      afterChange();
+    } else {
+      enterNumber(i, pk.d);
+    }
     return;
   }
   S.sel = i;
@@ -309,52 +327,66 @@ function selectCell(i) {
   render();
 }
 
-// The number picked up in notes mode (tap a number with no square selected).
-function notesArmed() {
-  return S.notesMode && S.sel < 0 ? S.hlDigit : 0;
-}
-
 function toggleNote(i, d) {
   const g = S.game;
   g.history.push({ i, v: 0, n: g.notes[i] });
   g.notes[i] ^= 1 << d;
 }
 
-function tapNumber(d) {
+// mode: 'num' (big bottom row) or 'note' (pencil-mark row)
+function tapNumber(d, mode) {
   const g = S.game;
   if (!g || g.finished) return;
   const i = S.sel;
-  if (S.notesMode) {
-    // Tapping the picked-up number again puts it down.
-    if (i < 0 && S.hlDigit === d) { S.hlDigit = 0; render(); return; }
-    // A selected empty square gets the note too, then the number stays picked up.
-    if (i >= 0 && !g.values[i]) toggleNote(i, d);
+
+  if (i >= 0 && !isLocked(i)) {
+    if (mode === 'note') {
+      // The square stays selected so several notes can go in.
+      if (g.values[i]) return;
+      toggleNote(i, d);
+      S.hlDigit = d;
+      afterChange();
+      return;
+    }
+    // The square is done; keep the number picked up for other squares.
+    enterNumber(i, d);
     S.sel = -1;
+    S.pick = { d, mode };
     S.hlDigit = d;
     if (g.mode === 'shared') send({ t: 'cursor', i: -1 });
-    afterChange();
-    return;
-  }
-  if (i < 0) { S.hlDigit = S.hlDigit === d ? 0 : d; render(); return; }
-  if (isLocked(i)) { S.hlDigit = d; render(); return; }
-
-  if (g.mode === 'shared') {
-    if (S.role === 'host') hostPlace(i, d, 'host');
-    else if (!send({ t: 'place', i, d })) toast('Not connected to ' + S.oppName);
-    S.hlDigit = d;
     render();
     return;
   }
 
-  // solo / race
+  // Nothing to fill: pick the number up, or put it down if it's already picked.
+  if (S.pick && S.pick.d === d && S.pick.mode === mode) {
+    S.pick = null;
+    S.hlDigit = 0;
+  } else {
+    S.pick = { d, mode };
+    S.hlDigit = d;
+    S.sel = -1;
+    if (g.mode === 'shared') send({ t: 'cursor', i: -1 });
+  }
+  render();
+}
+
+function enterNumber(i, d) {
+  const g = S.game;
+  if (g.mode === 'shared') {
+    if (S.role === 'host') hostPlace(i, d, 'host');
+    else if (!send({ t: 'place', i, d })) toast('Not connected to ' + S.oppName);
+    render();
+    return;
+  }
+
+  // solo / race: entering the same number again clears it
   const entry = { i, v: g.values[i], n: g.notes[i], peers: [], placed: d };
   if (g.values[i] === d) {
     g.values[i] = 0;
-    S.hlDigit = 0;
   } else {
     g.values[i] = d;
     g.notes[i] = 0;
-    S.hlDigit = d;
     const wrong = d !== g.solution[i];
     if (g.check && wrong) { g.mistakes++; flash(i, 'bad'); }
     // A placed number clears that pencil mark from its row, column and box.
@@ -379,7 +411,7 @@ function undo() {
   g.notes[h.i] = h.n;
   // put back the pencil marks that placing the number cleared
   if (h.peers) for (const p of h.peers) g.notes[p] |= 1 << h.placed;
-  if (!notesArmed()) {
+  if (!S.pick) {
     S.sel = h.i;
     S.hlDigit = g.values[h.i] || 0;
   }
@@ -388,7 +420,8 @@ function undo() {
 
 function erase() {
   const g = S.game;
-  if (!g || g.finished || S.sel < 0) return;
+  if (!g || g.finished) return;
+  if (S.sel < 0) { toast('Select a square to erase'); return; }
   const i = S.sel;
   if (g.values[i] && !isLocked(i)) {
     g.history.push({ i, v: g.values[i], n: g.notes[i] });
@@ -418,6 +451,7 @@ function hint() {
   for (const p of PEERS[i]) if (g.notes[p] & (1 << d)) { entry.peers.push(p); g.notes[p] &= ~(1 << d); }
   g.history.push(entry);
   g.hints++;
+  S.pick = null;
   S.sel = i;
   S.hlDigit = d;
   flash(i, 'good');
@@ -439,13 +473,13 @@ function moveSel(dr, dc) {
 
 document.addEventListener('keydown', (e) => {
   if (S.screen !== 'game' || !S.game || e.target.tagName === 'INPUT') return;
-  if (e.key >= '1' && e.key <= '9') tapNumber(+e.key);
+  const digit = /^Digit[1-9]$/.test(e.code) ? +e.code.slice(5) : (e.key >= '1' && e.key <= '9' ? +e.key : 0);
+  if (digit) tapNumber(digit, e.shiftKey ? 'note' : 'num');
   else if (e.key === 'Backspace' || e.key === 'Delete' || e.key === '0') erase();
   else if (e.key === 'ArrowUp') moveSel(-1, 0);
   else if (e.key === 'ArrowDown') moveSel(1, 0);
   else if (e.key === 'ArrowLeft') moveSel(0, -1);
   else if (e.key === 'ArrowRight') moveSel(0, 1);
-  else if (e.key === 'n' || e.key === 'N') { S.notesMode = !S.notesMode; render(); }
   else if (e.key === 'z' || e.key === 'u') undo();
   else return;
   e.preventDefault();
@@ -466,7 +500,7 @@ function checkSoloComplete() {
   }
   g.finished = true;
   g.finishTime = g.elapsed;
-  S.sel = -1; S.hlDigit = 0;
+  S.sel = -1; S.hlDigit = 0; S.pick = null;
   render();
   save();
   if (g.mode === 'solo') {
@@ -518,7 +552,7 @@ function finishShared() {
   if (g.finished) return;
   g.finished = true;
   g.finishTime = g.elapsed;
-  S.sel = -1; S.hlDigit = 0;
+  S.sel = -1; S.hlDigit = 0; S.pick = null;
   render();
   save();
   const me = g.scores[S.role], op = g.scores[oppRole()];
@@ -624,7 +658,7 @@ function startGame(game) {
   S.game = game;
   S.sel = -1;
   S.hlDigit = 0;
-  S.notesMode = false;
+  S.pick = null;
   S.oppCursor = -1;
   S.fullWarned = false;
   S.lastTick = Date.now();
@@ -1015,14 +1049,6 @@ function wire() {
 
   $('tool-undo').addEventListener('click', undo);
   $('tool-erase').addEventListener('click', erase);
-  $('tool-notes').addEventListener('click', () => {
-    S.notesMode = !S.notesMode;
-    if (S.notesMode && !S.notesTipShown) {
-      S.notesTipShown = true;
-      toast('Tap a number, then tap squares to pencil it in');
-    }
-    render();
-  });
   $('tool-hint').addEventListener('click', hint);
   $('tool-check').addEventListener('click', () => {
     const g = S.game;
@@ -1060,9 +1086,9 @@ function wire() {
   document.addEventListener('pointerdown', (e) => {
     if (S.screen !== 'game' || !S.game) return;
     // Use the path captured when the tap started: re-rendering a cell can detach e.target.
-    const inside = e.composedPath().some((el) => el instanceof Element && el.matches('.board, .numpad, .tools, .modal, .banner, .topbar'));
+    const inside = e.composedPath().some((el) => el instanceof Element && el.matches('.board, .numpad, .pad-label, .tools, .modal, .banner, .topbar'));
     if (inside) return;
-    S.sel = -1; S.hlDigit = 0;
+    S.sel = -1; S.hlDigit = 0; S.pick = null;
     if (S.game.mode === 'shared') send({ t: 'cursor', i: -1 });
     render();
   });

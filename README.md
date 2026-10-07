@@ -6,17 +6,19 @@ It's a plain static website with no build step, no accounts and no server of its
 ## Features
 
 - Puzzles generated in the browser (Easy / Medium / Hard / Expert), each with exactly one solution
-- **Notes** (pencil marks). With Notes on, tap a number to pick it up (it highlights everywhere),
-  then tap each empty square to add or remove that note. Tap the number again to put it down.
-  Tapping a square first and then a number also works.
-  Placing a number clears that pencil mark from its row, column and box.
+- **Two number rows**: the big bottom row enters numbers, and the small row above it (✎ Notes) adds pencil marks.
+  - *Number first*: with no square selected, tap a number in either row to pick it up. It highlights everywhere.
+    Every square you tap then gets that number (or note); tap a square again to take it back out.
+    Tapping a filled square switches to its number. Tap the picked number again, or tap outside the board, to put it down.
+  - *Square first*: select a square, then tap notes. The square stays selected so you can add several.
+    Tapping a big number fills the square and leaves that number picked up for the next squares.
+  - Placing a number clears that pencil mark from its row, column and box.
 - **Highlighting**: tap a cell to highlight its row, column and box, and every cell with the same number.
-  With no cell selected, tap a number on the pad to highlight that number on the board.
 - **Show mistakes** toggle: when it's on, wrong numbers turn red and are counted.
   Choose it per game. In solo you can also switch it on or off mid-game.
 - Undo, erase, a hint (solo only), a timer, and a count of how many of each number are left
 - Your game is saved, so a refresh or closing the tab won't lose it
-- Keyboard support on a computer: 1–9, arrow keys, Backspace, `N` for notes, `Z` for undo
+- Keyboard support on a computer: 1–9, arrow keys, Shift+1–9 for notes, Backspace, `Z` for undo
 
 ## Two-player modes
 
