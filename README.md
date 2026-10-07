@@ -16,7 +16,13 @@ It's a plain static website with no build step, no accounts and no server of its
 - **Highlighting**: tap a cell to highlight its row, column and box, and every cell with the same number.
 - **Show mistakes** toggle: when it's on, wrong numbers turn red and are counted.
   Choose it per game. In solo you can also switch it on or off mid-game.
-- Undo, erase, a hint (solo only), a timer, and a count of how many of each number are left
+- **Strategy hints** (solo): instead of filling in a random square, 💡 Hint names the easiest technique that makes progress
+  (Hidden Single, Pointing, Naked Pair, X-Wing, XY-Wing, Unique Rectangle, chains…) with a one-line reminder.
+  *Show me* highlights the pattern, explains each step and crosses out the notes it removes. *Fill in* places the number.
+- **Check** 🔍: marks wrong numbers, squares whose notes have lost the right answer, and notes that clash with a placed number.
+  Available in solo and shared games, and in races when mistakes are shown.
+- **Strategy guide** 📖 on the home screen and in-game: every technique from Singles to Forcing Chains, grouped by chapter.
+- Undo, erase, a timer, and a count of how many of each number are left
 - Your game is saved, so a refresh or closing the tab won't lose it
 - Keyboard support on a computer: 1–9, arrow keys, Shift+1–9 for notes, Backspace, `Z` for undo
 
@@ -71,5 +77,7 @@ That uses the browser's BroadcastChannel instead of WebRTC.
 
 - `index.html`, `css/style.css`: layout and styling (light and dark mode)
 - `js/sudoku.js`: puzzle generator and solver
+- `js/solver.js`: human-style technique finder used for hints
+- `js/strategies.js`: strategy guide text
 - `js/net.js`: the two-player connection (PeerJS, or BroadcastChannel with `?local`)
 - `js/app.js`: game logic and UI

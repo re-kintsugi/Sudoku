@@ -1,5 +1,7 @@
 import { generate, ROW, COL, BOX, PEERS, DIFFICULTIES } from './sudoku.js';
 import { Connection, randomCode, normalizeCode } from './net.js';
+import { nextHint, cellName } from './solver.js';
+import { CHAPTERS, technique } from './strategies.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -25,6 +27,10 @@ const S = {
   sel: -1,
   hlDigit: 0,
   pick: null,          // number picked up from a pad: { d, mode: 'num' | 'note' }
+  sheet: null,         // open bottom panel: 'hint' | 'check'
+  marks: null,         // board highlights from a hint or check
+  hint: null,          // { steps, headline, shown }
+  guideReturn: 'home',
   oppCursor: -1,
   screen: 'home',
   lastTick: 0,
@@ -38,6 +44,7 @@ function show(screen) {
   S.screen = screen;
   for (const el of document.querySelectorAll('.screen')) el.classList.add('hidden');
   $('screen-' + screen).classList.remove('hidden');
+  $('sheet').classList.toggle('hidden', !(S.sheet && screen === 'game'));
   if (screen === 'home') refreshResume();
   updateBanner();
 }
@@ -189,11 +196,18 @@ function render() {
     cl.toggle('wrong', g.mode !== 'shared' && g.check && !!v && !g.puzzle[i] && v !== g.solution[i]);
     cl.toggle('opp-owned', g.mode === 'shared' && !!g.owner[i] && g.owner[i] !== S.role);
     cl.toggle('opp-cursor', g.mode === 'shared' && S.oppCursor === i && S.connected);
+    const mk = S.marks;
+    cl.toggle('hint-area', !!mk && mk.area.has(i));
+    cl.toggle('hint-focus', !!mk && mk.focus.has(i));
+    cl.toggle('hint-target', !!mk && mk.target.has(i));
+    cl.toggle('chk-wrong', !!mk && mk.wrong.has(i));
+    cl.toggle('chk-missing', !!mk && mk.missing.has(i));
+    const xm = (mk && mk.x.get(i)) || 0;
     if (v) {
       if (c.dataset.v !== String(v)) { c.textContent = v; c.dataset.v = String(v); }
     } else {
       const n = g.notes[i];
-      const key = 'n' + n + ':' + hd;
+      const key = 'n' + n + ':' + hd + ':' + xm;
       if (c.dataset.v !== key) {
         c.dataset.v = key;
         if (!n) c.textContent = '';
@@ -201,7 +215,8 @@ function render() {
           let h = '<div class="notes">';
           for (let d = 1; d <= 9; d++) {
             const on = n & (1 << d);
-            h += `<span class="${on && d === hd ? 'hl' : ''}">${on ? d : ''}</span>`;
+            const cls = on && (xm & (1 << d)) ? 'x' : on && d === hd ? 'hl' : '';
+            h += `<span class="${cls}">${on ? d : ''}</span>`;
           }
           c.innerHTML = h + '</div>';
         }
@@ -231,6 +246,8 @@ function render() {
   $('tool-check').disabled = g.mode !== 'solo';
   $('tool-check').classList.toggle('hidden', g.mode === 'shared');
   $('tool-hint').classList.toggle('hidden', g.mode !== 'solo');
+  // In a race with mistakes hidden, checking would give an unfair advantage.
+  $('tool-verify').disabled = g.finished || (g.mode === 'race' && !g.check);
   $('tool-undo').disabled = !g.history.length || g.finished;
   document.querySelector('.tools').style.gridTemplateColumns =
     `repeat(${document.querySelectorAll('.tools .tool:not(.hidden)').length}, 1fr)`;
@@ -434,32 +451,202 @@ function erase() {
   afterChange();
 }
 
+// ---------------------------------------------------------------- hints & check
+
+const bitOf = (d) => 1 << d;
+function emptyMarks() {
+  return { area: new Set(), focus: new Set(), target: new Set(), wrong: new Set(), missing: new Set(), x: new Map() };
+}
+
+function wrongCells(g) {
+  const out = [];
+  for (let i = 0; i < 81; i++) if (!g.puzzle[i] && g.values[i] && g.values[i] !== g.solution[i]) out.push(i);
+  return out;
+}
+
+function openSheet(kind, kicker, bodyHtml, actions) {
+  S.sheet = kind;
+  $('sheet-kicker').textContent = kicker;
+  $('sheet-body').innerHTML = bodyHtml;
+  const box = $('sheet-actions');
+  box.innerHTML = '';
+  for (const a of actions) {
+    const b = document.createElement('button');
+    b.className = 'btn ' + (a.cls || '');
+    b.textContent = a.label;
+    b.onclick = a.onClick;
+    box.appendChild(b);
+  }
+  $('sheet').classList.toggle('hidden', S.screen !== 'game');
+  $('sheet').scrollTop = 0;
+  document.body.classList.add('sheet-open');
+}
+
+function hideSheet() {
+  S.sheet = null;
+  S.marks = null;
+  S.hint = null;
+  $('sheet').classList.add('hidden');
+  document.body.classList.remove('sheet-open');
+}
+function closeSheet() { hideSheet(); render(); }
+
+function techTitle(id) {
+  const t = technique(id);
+  return t ? `${t.name} <span class="chip l-${t.level}">${t.level}</span>` : id;
+}
+
 function hint() {
   const g = S.game;
   if (!g || g.finished || g.mode !== 'solo') return;
-  let i = S.sel;
-  if (i < 0 || isLocked(i) || g.values[i] === g.solution[i]) {
-    const empties = [];
-    for (let k = 0; k < 81; k++) if (g.values[k] !== g.solution[k]) empties.push(k);
-    if (!empties.length) return;
-    i = empties[Math.floor(Math.random() * empties.length)];
+  hideSheet();
+  const wrong = wrongCells(g);
+  if (wrong.length) {
+    openSheet('hint', '💡 Hint', `<h3>Fix a mistake first</h3>
+      <p>${wrong.length === 1 ? 'One of your numbers is' : `${wrong.length} of your numbers are`} wrong. Hints work out the next step from a correct board.</p>`,
+      [{ label: 'Show me', cls: 'primary', onClick: runCheck }]);
+    render();
+    return;
   }
-  const d = g.solution[i];
+  const steps = nextHint(g.values);
+  if (!steps || !steps.length) { toast('No hint available'); return; }
+  // Skip elimination steps your notes already reflect.
+  const done = (st) => st.elims.length && st.elims.every(([c, d]) => g.notes[c] && !(g.notes[c] & bitOf(d)));
+  const pending = steps.filter((st) => st.place || !done(st));
+  const headline = pending.reduce((a, b) => (b.rank > a.rank ? b : a));
+  S.hint = { steps: pending, headline };
+  g.hints++;
+  save();
+  const t = technique(headline.tech);
+  openSheet('hint', '💡 Hint · strategy to look for', `<h3>${techTitle(headline.tech)}</h3>
+    <p class="summary">${t ? t.summary : ''}</p>
+    <p class="muted">See if you can find it, or tap <b>Show me</b>.</p>`,
+    [{ label: 'Show me', cls: 'primary', onClick: showHintDetail },
+      { label: 'Read about it', onClick: () => openGuide(headline.tech) }]);
+  render();
+}
+
+function showHintDetail() {
+  const h = S.hint;
+  if (!h) return;
+  const mk = emptyMarks();
+  for (const st of h.steps) {
+    for (const c of st.cells) mk.area.add(c);
+    for (const c of st.focus || []) mk.focus.add(c);
+    for (const [c, d] of st.elims) mk.x.set(c, (mk.x.get(c) || 0) | bitOf(d));
+    if (st.place) mk.target.add(st.place.cell);
+  }
+  for (const c of mk.target) mk.focus.delete(c);
+  S.marks = mk;
+  const last = h.steps[h.steps.length - 1];
+  const items = h.steps.map((st) => {
+    const t = technique(st.tech);
+    return `<li><b>${t ? t.name : st.tech}:</b> ${st.text}</li>`;
+  }).join('');
+  openSheet('hint', '💡 Hint · how it works', `<h3>${techTitle(h.headline.tech)}</h3><ol>${items}</ol>
+    <p class="muted">${cellName(last.place.cell)} is outlined in green. Crossed-out notes are the ones these steps remove.</p>`,
+    [{ label: `Fill in ${last.place.digit}`, cls: 'primary', onClick: fillHint },
+      { label: 'Read about it', onClick: () => openGuide(h.headline.tech) }]);
+  render();
+}
+
+function fillHint() {
+  const g = S.game;
+  const h = S.hint;
+  if (!g || !h) return;
+  // Remove the eliminated candidates from any notes you've written.
+  for (const st of h.steps) {
+    for (const [c, d] of st.elims) {
+      if (g.notes[c] & bitOf(d)) { g.history.push({ i: c, v: 0, n: g.notes[c] }); g.notes[c] &= ~bitOf(d); }
+    }
+  }
+  const { cell: i, digit: d } = h.steps[h.steps.length - 1].place;
   const entry = { i, v: g.values[i], n: g.notes[i], peers: [], placed: d };
   g.values[i] = d;
   g.notes[i] = 0;
-  for (const p of PEERS[i]) if (g.notes[p] & (1 << d)) { entry.peers.push(p); g.notes[p] &= ~(1 << d); }
+  for (const p of PEERS[i]) if (g.notes[p] & bitOf(d)) { entry.peers.push(p); g.notes[p] &= ~bitOf(d); }
   g.history.push(entry);
-  g.hints++;
   S.pick = null;
   S.sel = i;
   S.hlDigit = d;
+  hideSheet();
   flash(i, 'good');
   afterChange();
   checkSoloComplete();
 }
 
+function runCheck() {
+  const g = S.game;
+  if (!g) return;
+  hideSheet();
+  const mk = emptyMarks();
+  for (const c of wrongCells(g)) mk.wrong.add(c);
+  let clashes = 0;
+  for (let i = 0; i < 81; i++) {
+    if (g.values[i] || !g.notes[i]) continue;
+    if (!(g.notes[i] & bitOf(g.solution[i]))) mk.missing.add(i);
+    let m = 0;
+    for (const p of PEERS[i]) if (g.values[p] && (g.notes[i] & bitOf(g.values[p]))) m |= bitOf(g.values[p]);
+    if (m) { mk.x.set(i, m); clashes += digitsCount(m); }
+  }
+  S.marks = mk;
+  const lines = [];
+  if (mk.wrong.size) lines.push(`<li><b>${mk.wrong.size}</b> wrong number${mk.wrong.size > 1 ? 's' : ''} (shaded red)</li>`);
+  if (mk.missing.size) lines.push(`<li><b>${mk.missing.size}</b> square${mk.missing.size > 1 ? 's' : ''} whose notes don't include the right number (orange outline)</li>`);
+  if (clashes) lines.push(`<li><b>${clashes}</b> note${clashes > 1 ? 's' : ''} that clash with a number in the same row, column or box (crossed out)</li>`);
+  const actions = [];
+  if (clashes) actions.push({ label: 'Remove clashing notes', cls: 'primary', onClick: removeClashes });
+  actions.push({ label: 'Done', cls: clashes ? '' : 'primary', onClick: closeSheet });
+  openSheet('check', '🔍 Check', lines.length
+    ? `<h3>Found ${lines.length === 1 && !clashes && (mk.wrong.size + mk.missing.size) === 1 ? 'a problem' : 'some problems'}</h3><ul>${lines.join('')}</ul>`
+    : `<h3>All good ✓</h3><p>Your numbers are all correct and none of your notes rule out the right answer.</p>`,
+    actions);
+  render();
+}
+
+function digitsCount(m) { let n = 0; for (let d = 1; d <= 9; d++) if (m & bitOf(d)) n++; return n; }
+
+function removeClashes() {
+  const g = S.game;
+  const mk = S.marks;
+  if (!g || !mk) return;
+  for (const [c, m] of mk.x) { g.history.push({ i: c, v: 0, n: g.notes[c] }); g.notes[c] &= ~m; }
+  hideSheet();
+  afterChange();
+  toast('Clashing notes removed');
+}
+
+// ---------------------------------------------------------------- strategy guide
+
+function buildGuide() {
+  const box = $('guide');
+  let h = `<p>Techniques roughly in order of difficulty. When a hint names a strategy, "Read about it" jumps to it here.</p>`;
+  for (const ch of CHAPTERS) {
+    h += `<details id="ch-${ch.id}"><summary><span>${ch.title}${ch.intro ? `<small>${ch.intro}</small>` : ''}</span></summary>`;
+    for (const t of ch.techniques) {
+      h += `<div class="tech" id="tech-${t.id}"><h4>${t.name} <span class="chip l-${t.level}">${t.level}</span></h4>
+        <p class="tsum">${t.summary}</p>${t.body.map((p) => `<p>${p}</p>`).join('')}</div>`;
+    }
+    h += '</details>';
+  }
+  box.innerHTML = h;
+}
+
+function openGuide(techId) {
+  if (S.screen !== 'guide') S.guideReturn = S.screen;
+  show('guide');
+  const t = techId && technique(techId);
+  if (!t) { window.scrollTo(0, 0); return; }
+  const el = $('tech-' + (document.getElementById('tech-' + techId) ? techId : t.id));
+  el.closest('details').open = true;
+  requestAnimationFrame(() => {
+    el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+  });
+}
+
 function afterChange() {
+  if (S.sheet) hideSheet(); // the board changed, so any hint or check is stale
   render();
   save();
   if (S.game.mode === 'race') sendProgress();
@@ -642,7 +829,8 @@ function tick() {
   const dt = now - (S.lastTick || now);
   S.lastTick = now;
   const g = S.game;
-  if (!g || g.finished || S.screen !== 'game') return;
+  if (!g || g.finished) return;
+  if (S.screen !== 'game' && !(S.screen === 'guide' && g.mode !== 'solo' && S.guideReturn === 'game')) return;
   // Solo pauses while the app is in the background; multiplayer keeps running.
   if (g.mode === 'solo' && document.hidden) return;
   if (g.mode === 'shared' && S.role === 'guest' && !S.connected) return;
@@ -659,6 +847,7 @@ function startGame(game) {
   S.sel = -1;
   S.hlDigit = 0;
   S.pick = null;
+  hideSheet();
   S.oppCursor = -1;
   S.fullWarned = false;
   S.lastTick = Date.now();
@@ -1011,7 +1200,8 @@ function wire() {
 
   document.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => {
     const go = b.dataset.go;
-    if (go === 'solo') openSetup('solo');
+    if (go === 'guide') openGuide();
+    else if (go === 'solo') openSetup('solo');
     else if (go === 'host') openSetup('host');
     else if (go === 'join') {
       disconnect(); S.role = null; S.game = null;
@@ -1050,6 +1240,13 @@ function wire() {
   $('tool-undo').addEventListener('click', undo);
   $('tool-erase').addEventListener('click', erase);
   $('tool-hint').addEventListener('click', hint);
+  $('tool-verify').addEventListener('click', runCheck);
+  $('sheet-close').addEventListener('click', closeSheet);
+  $('btn-guide').addEventListener('click', () => openGuide());
+  $('btn-guide-back').addEventListener('click', () => {
+    show(S.guideReturn === 'game' && S.game ? 'game' : S.guideReturn || 'home');
+    if (S.screen === 'game') render();
+  });
   $('tool-check').addEventListener('click', () => {
     const g = S.game;
     if (!g || g.mode !== 'solo') return;
@@ -1086,7 +1283,7 @@ function wire() {
   document.addEventListener('pointerdown', (e) => {
     if (S.screen !== 'game' || !S.game) return;
     // Use the path captured when the tap started: re-rendering a cell can detach e.target.
-    const inside = e.composedPath().some((el) => el instanceof Element && el.matches('.board, .numpad, .pad-label, .tools, .modal, .banner, .topbar'));
+    const inside = e.composedPath().some((el) => el instanceof Element && el.matches('.board, .numpad, .pad-label, .tools, .modal, .banner, .topbar, .sheet'));
     if (inside) return;
     S.sel = -1; S.hlDigit = 0; S.pick = null;
     if (S.game.mode === 'shared') send({ t: 'cursor', i: -1 });
@@ -1095,5 +1292,6 @@ function wire() {
 }
 
 buildBoard();
+buildGuide();
 wire();
 show('home');

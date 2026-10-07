@@ -33,6 +33,7 @@
           <button class="btn primary" data-go="solo">Play solo</button>
           <button class="btn" data-go="host">Host a 2‑player game</button>
           <button class="btn" data-go="join">Join a game</button>
+          <button class="btn" data-go="guide">📖 Strategy guide</button>
         </div>
         <p class="hint">Two players: one person taps <b>Host</b> and reads out the 4‑letter code, the other taps <b>Join</b> and types it in.</p>
       </div>
@@ -113,7 +114,10 @@
       <header class="topbar">
         <button class="icon-btn" id="btn-leave" aria-label="Menu">‹</button>
         <h2 id="game-title">Sudoku</h2>
-        <span class="timer" id="timer">0:00</span>
+        <span class="top-right">
+          <span class="timer" id="timer">0:00</span>
+          <button class="icon-btn small" id="btn-guide" aria-label="Strategy guide">📖</button>
+        </span>
       </header>
 
       <div class="scorebar" id="scorebar"></div>
@@ -125,14 +129,35 @@
       <div class="tools">
         <button class="tool" id="tool-undo"><span class="ti">↶</span>Undo</button>
         <button class="tool" id="tool-erase"><span class="ti">⌫</span>Erase</button>
-        <button class="tool" id="tool-check"><span class="ti">✓</span>Mistakes <em id="check-state">on</em></button>
+        <button class="tool" id="tool-verify"><span class="ti">🔍</span>Check</button>
         <button class="tool" id="tool-hint"><span class="ti">💡</span>Hint</button>
+        <button class="tool" id="tool-check"><span class="ti">✓</span>Mistakes <em id="check-state">on</em></button>
       </div>
 
       <div class="pad-label">✎ Notes</div>
       <div class="numpad notepad" id="notepad"></div>
       <div class="numpad" id="numpad"></div>
     </section>
+
+    <!-- Strategy guide -->
+    <section class="screen hidden" id="screen-guide">
+      <header class="topbar">
+        <button class="icon-btn" id="btn-guide-back" aria-label="Back">‹</button>
+        <h2>Strategy guide</h2>
+        <span></span>
+      </header>
+      <div class="guide" id="guide"></div>
+    </section>
+
+    <!-- Hint / check panel, sits over the number pads so the board stays visible -->
+    <div class="sheet hidden" id="sheet">
+      <div class="sheet-head">
+        <span class="sheet-kicker" id="sheet-kicker"></span>
+        <button class="icon-btn small" id="sheet-close" aria-label="Close">×</button>
+      </div>
+      <div id="sheet-body"></div>
+      <div class="sheet-actions" id="sheet-actions"></div>
+    </div>
 
     <div class="banner hidden" id="conn-banner">
       <span id="conn-text">Connection lost</span>
