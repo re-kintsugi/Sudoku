@@ -172,6 +172,7 @@ function lockedCandidates(st) {
 // ------------------------------------------------------------------ subsets
 
 const SIZE_NAME = { 2: 'Pair', 3: 'Triple', 4: 'Quadruple' };
+const WORD = { 2: 'two', 3: 'three', 4: 'four' };
 
 function nakedSubset(n) {
   return (st) => {
@@ -196,7 +197,7 @@ function nakedSubset(n) {
           tech, place: null, elims,
           premise: set.flatMap((c) => digitsOf(0x3fe & ~mask).map((d) => [c, d])),
           cells: set, house: h,
-          text: `${cellList(set)} in ${where} can only hold ${digitList(ds)} between them. Those ${n} numbers must go in these ${n} squares, so they can be removed from the other squares in ${where}: ${cellList([...new Set(elims.map((e) => e[0]))])}.`,
+          text: `${cellList(set)} in ${where} can only hold ${digitList(ds)} between them. Those ${WORD[n]} numbers must go in these ${WORD[n]} squares, so they can be removed from the other squares in ${where}: ${cellList([...new Set(elims.map((e) => e[0]))])}.`,
         };
       }
     }
@@ -259,7 +260,7 @@ function basicFish(n) {
             tech: FISH_NAME[n].toLowerCase(), place: null, elims,
             premise: baseNames.flatMap((h) => HOUSES[h].filter((c) => !st.values[c] && !coverHouses.some((x) => HOUSES[x].includes(c))).map((c) => [c, d])),
             cells: set.flatMap((b) => b.pos),
-            text: `Look at the ${d}s. In ${plural(baseNames, rowsBase)}, the ${d}s can only be in ${plural(coverHouses, !rowsBase)}. Those ${n} ${d}s use up ${plural(coverHouses, !rowsBase)}, so ${d} can be removed from the rest of them: ${cellList(elims.map((e) => e[0]))}.`,
+            text: `Look at the ${d}s. In ${plural(baseNames, rowsBase)}, the ${d}s can only be in ${plural(coverHouses, !rowsBase)}. Those ${WORD[n]} ${d}s use up ${plural(coverHouses, !rowsBase)}, so ${d} can be removed from the rest of them: ${cellList(elims.map((e) => e[0]))}.`,
           };
         }
       }
@@ -743,3 +744,6 @@ export function ratePuzzle(puzzle) {
   const tier = r.used.reduce((t, id) => Math.max(t, TIER_OF[id] ?? 3), 0);
   return { tier: TIERS[tier], techs: r.used };
 }
+
+// For tools/build-examples.mjs, which mines real positions for the guide's diagrams.
+export const _internals = { TECHNIQUES, apply, findStep };

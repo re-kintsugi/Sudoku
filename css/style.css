@@ -321,3 +321,37 @@ body.sheet-open #screen-game { padding-bottom: 46dvh; }
 .sheet { font-size: 15px; }
 .setup-help { color: var(--muted); font-size: 14px; line-height: 1.4; min-height: 2.8em; }
 #modal-body p.muted { font-size: 14px; }
+
+/* ---------- Guide diagrams ---------- */
+.diagram { margin: 8px 0 10px; }
+.diagram-svg { display: block; width: 100%; max-width: 340px; margin: 0 auto; }
+.diagram figcaption { font-size: 13.5px; line-height: 1.45; color: var(--muted); margin-top: 6px; }
+.dg-bg { fill: var(--surface); }
+.dg-shade { fill: var(--peer); }
+.dg-pat { fill: var(--hint-soft); }
+.dg-elimcell { fill: var(--bad-soft); }
+.dg-grid { stroke: var(--line); stroke-width: 1; }
+.dg-grid.dg-thick { stroke: var(--line-strong); stroke-width: 2; }
+.dg-label { fill: var(--muted); font-size: 9px; text-anchor: middle; font-family: inherit; }
+.dg-val { fill: var(--muted); font-size: 19px; text-anchor: middle; font-family: inherit; opacity: 0.75; }
+.dg-new { fill: var(--good); font-size: 21px; font-weight: 700; text-anchor: middle; font-family: inherit; }
+.dg-cand { fill: var(--text); font-size: 10px; font-weight: 600; text-anchor: middle; font-family: inherit; }
+.dg-cand.dg-x { fill: var(--bad); }
+.dg-strike { stroke: var(--bad); stroke-width: 1.6; }
+.dg-mark { fill: var(--hint-text); font-size: 15px; font-weight: 800; text-anchor: middle; font-family: inherit; }
+.dg-focus { fill: none; stroke: var(--hint); stroke-width: 2.5; }
+.dg-target { fill: none; stroke: var(--good); stroke-width: 3; }
+.dg-link { stroke: var(--me); stroke-width: 2; opacity: 0.75; stroke-linecap: round; }
+.dg-weak { stroke-dasharray: 4 4; }
+.dg-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--muted); margin: 0 4px 6px; }
+.dg-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.dg-legend i { display: inline-block; width: 14px; height: 14px; border-radius: 3px; }
+.lg-pat { background: var(--hint-soft); border: 1px solid var(--hint); }
+.lg-elim { background: var(--bad-soft); border: 1px solid var(--bad); }
+.lg-target { border: 2.5px solid var(--good); }
+.lg-strong { height: 0 !important; border-top: 2.5px solid var(--me); width: 18px !important; border-radius: 0 !important; }
+.lg-weak { height: 0 !important; border-top: 2.5px dashed var(--me); width: 18px !important; border-radius: 0 !important; }
+.dg-val.dg-valhl { fill: var(--text); opacity: 1; font-weight: 700; }
+.dg-link { opacity: 0.6; }
+.dg-focus { stroke-width: 2; }
+.dg-target { stroke-width: 2.5; }

@@ -3,6 +3,9 @@ import { generateRated } from './generate.js';
 import { Connection, randomCode, normalizeCode } from './net.js';
 import { nextHint, cellName } from './solver.js';
 import { CHAPTERS, technique } from './strategies.js';
+import { diagramSVG, LEGEND } from './diagram.js';
+import { EXAMPLES } from './examples.js';
+import { HAND_DIAGRAMS } from './diagrams-hand.js';
 
 // What each difficulty asks of you, shown on the setup screen.
 const DIFFICULTY_HELP = {
@@ -679,16 +682,30 @@ function removeClashes() {
 
 function buildGuide() {
   const box = $('guide');
-  let h = `<p>Techniques roughly in order of difficulty. When a hint names a strategy, "Read about it" jumps to it here.</p>`;
+  let h = `<p>Techniques roughly in order of difficulty. When a hint names a strategy, "Read about it" jumps to it here. Each one has an example board:</p>${LEGEND}`;
   for (const ch of CHAPTERS) {
     h += `<details id="ch-${ch.id}"><summary><span>${ch.title}${ch.intro ? `<small>${ch.intro}</small>` : ''}</span></summary>`;
     for (const t of ch.techniques) {
       h += `<div class="tech" id="tech-${t.id}"><h4>${t.name} <span class="chip l-${t.level}">${t.level}</span></h4>
-        <p class="tsum">${t.summary}</p>${t.body.map((p) => `<p>${p}</p>`).join('')}</div>`;
+        <p class="tsum">${t.summary}</p>${diagramFor(t.id) ? '<figure class="diagram"></figure>' : ''}${t.body.map((p) => `<p>${p}</p>`).join('')}</div>`;
     }
     h += '</details>';
   }
   box.innerHTML = h;
+  // Draw a chapter's diagrams the first time it's opened.
+  for (const d of box.querySelectorAll('details')) d.addEventListener('toggle', () => { if (d.open) drawDiagrams(d); });
+}
+
+// Real positions mined by tools/build-examples.mjs, or hand-made ones.
+function diagramFor(id) {
+  return EXAMPLES[id] || HAND_DIAGRAMS[id] || (id === 'finned-swordfish' && EXAMPLES['sashimi-swordfish']) || null;
+}
+
+function drawDiagrams(details) {
+  for (const fig of details.querySelectorAll('figure.diagram:empty')) {
+    const spec = diagramFor(fig.closest('.tech').id.slice(5));
+    fig.innerHTML = diagramSVG(spec) + `<figcaption>${spec.text || ''}</figcaption>`;
+  }
 }
 
 function openGuide(techId) {
@@ -697,7 +714,9 @@ function openGuide(techId) {
   const t = techId && technique(techId);
   if (!t) { window.scrollTo(0, 0); return; }
   const el = $('tech-' + (document.getElementById('tech-' + techId) ? techId : t.id));
-  el.closest('details').open = true;
+  const det = el.closest('details');
+  drawDiagrams(det);
+  det.open = true;
   requestAnimationFrame(() => {
     el.scrollIntoView({ block: 'start', behavior: 'smooth' });
     el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
