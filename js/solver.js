@@ -726,3 +726,20 @@ export function solveLogically(values) {
 }
 
 export { HOUSES };
+
+// Difficulty tiers by technique, matching the strategy guide's grouping.
+const TIER_OF = {
+  'full-house': 0, 'naked-single': 0, 'hidden-single': 0,
+  pointing: 1, claiming: 1, 'naked-pair': 1, 'locked-pair': 1, 'hidden-pair': 1,
+  'naked-triple': 1, 'locked-triple': 1, 'hidden-triple': 1,
+  'x-wing': 2, swordfish: 2, 'naked-quadruple': 2, 'hidden-quadruple': 2,
+  'xy-wing': 2, 'ur-type-1': 2, 'ur-type-2': 2, 'bug-plus-one': 2,
+};
+export const TIERS = ['easy', 'medium', 'hard', 'expert'];
+
+// Which tier a puzzle belongs to, and the techniques a logical solve used.
+export function ratePuzzle(puzzle) {
+  const r = solveLogically(puzzle);
+  const tier = r.used.reduce((t, id) => Math.max(t, TIER_OF[id] ?? 3), 0);
+  return { tier: TIERS[tier], techs: r.used };
+}

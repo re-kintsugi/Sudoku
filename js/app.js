@@ -1,7 +1,16 @@
-import { generate, ROW, COL, BOX, PEERS, DIFFICULTIES } from './sudoku.js';
+import { ROW, COL, BOX, PEERS, DIFFICULTIES } from './sudoku.js';
+import { generateRated } from './generate.js';
 import { Connection, randomCode, normalizeCode } from './net.js';
 import { nextHint, cellName } from './solver.js';
 import { CHAPTERS, technique } from './strategies.js';
+
+// What each difficulty asks of you, shown on the setup screen.
+const DIFFICULTY_HELP = {
+  easy: 'Singles only: full houses, naked and hidden singles.',
+  medium: 'Needs pointing/claiming or naked/hidden pairs and triples.',
+  hard: 'Needs an X-Wing, Swordfish, XY-Wing, Unique Rectangle or similar.',
+  expert: 'Needs wings, finned fish, chains or a forcing chain.',
+};
 
 const $ = (id) => document.getElementById(id);
 
@@ -96,17 +105,18 @@ function send(msg) {
 
 // ---------------------------------------------------------------- game model
 
-function makeGame({ mode, difficulty, check, puzzle, solution, id }) {
-  if (!puzzle) ({ puzzle, solution } = generate(difficulty));
+function makeGame({ mode, difficulty, check, puzzle, solution, id, techs }) {
   return {
     id: id || Math.random().toString(36).slice(2, 10),
     mode, difficulty,
     check: mode === 'shared' ? true : !!check,
     puzzle, solution,
+    techs: techs || [],
     values: puzzle.slice(),
     notes: new Array(81).fill(0),
     owner: new Array(81).fill(null),
     history: [],
+    redo: [],
     mistakes: 0,
     hints: 0,
     scores: { host: 0, guest: 0 },
@@ -122,7 +132,7 @@ function makeGame({ mode, difficulty, check, puzzle, solution, id }) {
 // What the host shares with the guest.
 function publicGame(g) {
   return {
-    id: g.id, mode: g.mode, difficulty: g.difficulty, check: g.check,
+    id: g.id, mode: g.mode, difficulty: g.difficulty, check: g.check, techs: g.techs,
     puzzle: g.puzzle, solution: g.solution,
     values: g.values, owner: g.owner, scores: g.scores, mistakesBy: g.mistakesBy,
     elapsed: g.elapsed, finished: g.mode === 'shared' ? g.finished : false,
@@ -248,6 +258,7 @@ function render() {
   $('tool-hint').classList.toggle('hidden', g.mode !== 'solo');
   $('tool-verify').disabled = g.finished;
   $('tool-undo').disabled = !g.history.length || g.finished;
+  $('tool-redo').disabled = !(g.redo && g.redo.length) || g.finished;
   document.querySelector('.tools').style.gridTemplateColumns =
     `repeat(${document.querySelectorAll('.tools .tool:not(.hidden)').length}, 1fr)`;
   renderScorebar();
@@ -345,7 +356,7 @@ function selectCell(i) {
 
 function toggleNote(i, d) {
   const g = S.game;
-  g.history.push({ i, v: 0, n: g.notes[i] });
+  pushHistory(g, { i, v: 0, n: g.notes[i] });
   g.notes[i] ^= 1 << d;
 }
 
@@ -412,26 +423,75 @@ function enterNumber(i, d) {
       }
     }
   }
-  g.history.push(entry);
+  pushHistory(g, entry);
   afterChange();
   checkSoloComplete();
 }
 
+// Entries pushed during one tap share a group, so undo/redo treat them as one step.
+let historyGroup = 0, groupOpen = false;
+function pushHistory(g, entry) {
+  if (!groupOpen) {
+    historyGroup++;
+    groupOpen = true;
+    queueMicrotask(() => { groupOpen = false; });
+  }
+  entry.grp = historyGroup;
+  g.history.push(entry);
+  g.redo = []; // a new move replaces anything you'd undone
+}
+
 function undo() {
   const g = S.game;
-  if (!g || g.finished) return;
-  const h = g.history.pop();
-  if (!h) return;
-  if (g.mode === 'shared' && g.values[h.i]) { render(); return; }
-  g.values[h.i] = h.v;
-  g.notes[h.i] = h.n;
-  // put back the pencil marks that placing the number cleared
-  if (h.peers) for (const p of h.peers) g.notes[p] |= 1 << h.placed;
-  if (!S.pick) {
-    S.sel = h.i;
-    S.hlDigit = g.values[h.i] || 0;
+  if (!g || g.finished || !g.history.length) return;
+  const grp = g.history[g.history.length - 1].grp;
+  const step = { entries: [], after: [] };
+  // Entries saved before grouping existed have no group: undo those one at a time.
+  for (let first = true; g.history.length && (first || (grp !== undefined && g.history[g.history.length - 1].grp === grp)); first = false) {
+    const h = g.history.pop();
+    // In a shared game the other player may have filled this square since.
+    if (g.mode === 'shared' && g.values[h.i]) continue;
+    step.entries.unshift(h);
+    step.after.unshift({ v: g.values[h.i], n: g.notes[h.i], peers: (h.peers || []).map((p) => [p, g.notes[p]]) });
+    g.values[h.i] = h.v;
+    g.notes[h.i] = h.n;
+    // put back the pencil marks that placing the number cleared
+    if (h.peers) for (const p of h.peers) g.notes[p] |= 1 << h.placed;
   }
-  afterChange();
+  if (!step.entries.length) { render(); return; }
+  (g.redo ||= []).push(step);
+  focusAfterUndo(step.entries[step.entries.length - 1].i);
+  render();
+  save();
+  if (g.mode === 'race') sendProgress();
+}
+
+function redo() {
+  const g = S.game;
+  if (!g || g.finished || !g.redo || !g.redo.length) return;
+  const step = g.redo.pop();
+  step.entries.forEach((h, k) => {
+    if (g.mode === 'shared' && g.values[h.i]) return;
+    const a = step.after[k];
+    g.values[h.i] = a.v;
+    g.notes[h.i] = a.n;
+    for (const [p, n] of a.peers) g.notes[p] = n;
+    g.history.push(h);
+  });
+  const last = step.entries[step.entries.length - 1];
+  focusAfterUndo(last.i);
+  render();
+  save();
+  if (g.mode === 'race') sendProgress();
+  if (g.mode !== 'shared') checkSoloComplete();
+}
+
+function focusAfterUndo(i) {
+  if (S.sheet) hideSheet();
+  if (!S.pick) {
+    S.sel = i;
+    S.hlDigit = S.game.values[i] || 0;
+  }
 }
 
 function erase() {
@@ -440,11 +500,11 @@ function erase() {
   if (S.sel < 0) { toast('Select a square to erase'); return; }
   const i = S.sel;
   if (g.values[i] && !isLocked(i)) {
-    g.history.push({ i, v: g.values[i], n: g.notes[i] });
+    pushHistory(g, { i, v: g.values[i], n: g.notes[i] });
     g.values[i] = 0;
     S.hlDigit = 0;
   } else if (!g.values[i] && g.notes[i]) {
-    g.history.push({ i, v: 0, n: g.notes[i] });
+    pushHistory(g, { i, v: 0, n: g.notes[i] });
     g.notes[i] = 0;
   } else return;
   afterChange();
@@ -556,7 +616,7 @@ function fillHint() {
   // Remove the eliminated candidates from any notes you've written.
   for (const st of h.steps) {
     for (const [c, d] of st.elims) {
-      if (g.notes[c] & bitOf(d)) { g.history.push({ i: c, v: 0, n: g.notes[c] }); g.notes[c] &= ~bitOf(d); }
+      if (g.notes[c] & bitOf(d)) { pushHistory(g, { i: c, v: 0, n: g.notes[c] }); g.notes[c] &= ~bitOf(d); }
     }
   }
   const { cell: i, digit: d } = h.steps[h.steps.length - 1].place;
@@ -564,7 +624,7 @@ function fillHint() {
   g.values[i] = d;
   g.notes[i] = 0;
   for (const p of PEERS[i]) if (g.notes[p] & bitOf(d)) { entry.peers.push(p); g.notes[p] &= ~bitOf(d); }
-  g.history.push(entry);
+  pushHistory(g, entry);
   S.pick = null;
   S.sel = i;
   S.hlDigit = d;
@@ -609,7 +669,7 @@ function removeClashes() {
   const g = S.game;
   const mk = S.marks;
   if (!g || !mk) return;
-  for (const [c, m] of mk.x) { g.history.push({ i: c, v: 0, n: g.notes[c] }); g.notes[c] &= ~m; }
+  for (const [c, m] of mk.x) { pushHistory(g, { i: c, v: 0, n: g.notes[c] }); g.notes[c] &= ~m; }
   hideSheet();
   afterChange();
   toast('Clashing notes removed');
@@ -666,6 +726,7 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowDown') moveSel(1, 0);
   else if (e.key === 'ArrowLeft') moveSel(0, -1);
   else if (e.key === 'ArrowRight') moveSel(0, 1);
+  else if (e.key === 'y' || e.key === 'Y' || e.key === 'Z') redo();
   else if (e.key === 'z' || e.key === 'u') undo();
   else return;
   e.preventDefault();
@@ -691,7 +752,7 @@ function checkSoloComplete() {
   save();
   if (g.mode === 'solo') {
     modal('Solved! 🎉', `<p>${DIFFICULTIES[g.difficulty].label} puzzle in <b>${fmtTime(g.finishTime)}</b>.</p>
-      <p>${g.mistakes} mistake${g.mistakes === 1 ? '' : 's'}${g.hints ? `, ${g.hints} hint${g.hints > 1 ? 's' : ''}` : ''}.</p>`,
+      <p>${g.mistakes} mistake${g.mistakes === 1 ? '' : 's'}${g.hints ? `, ${g.hints} hint${g.hints > 1 ? 's' : ''}` : ''}.</p>${techSummary(g)}`,
       [{ label: 'New game', cls: 'primary', onClick: () => openSetup('solo') }, { label: 'Menu', onClick: () => show('home') }]);
   } else {
     sendProgress();
@@ -722,6 +783,7 @@ function resultRows(rows) {
 }
 
 function endModal(title, body) {
+  body += techSummary(S.game);
   const actions = [];
   if (S.role === 'host') {
     actions.push({ label: 'New game', cls: 'primary', onClick: () => backToLobby() });
@@ -883,7 +945,9 @@ function syncSetupUI() {
   $('mistake-help').textContent = shared
     ? 'Always on for shared board — every number is scored the moment it’s placed.'
     : S.setupKind === 'host' ? 'Applies to both players. Wrong numbers turn red straight away.' : 'Wrong numbers turn red straight away. You can switch this during the game.';
+  $('difficulty-help').textContent = DIFFICULTY_HELP[st.difficulty];
   const btn = $('btn-start');
+  if (generating) return;
   if (S.setupKind === 'host') {
     btn.disabled = !S.connected;
     btn.textContent = S.connected ? 'Start game' : 'Waiting for player…';
@@ -894,18 +958,41 @@ function syncSetupUI() {
   store.set('sudoku-setup', st);
 }
 
-function onStartPressed() {
+let generating = false;
+async function onStartPressed() {
   const st = S.setup;
+  if (generating || (S.setupKind === 'host' && !S.connected)) return;
+  const btn = $('btn-start');
+  generating = true;
+  btn.disabled = true;
+  btn.textContent = 'Making a puzzle…';
+  let p;
+  try {
+    p = await generateRated(st.difficulty);
+  } finally {
+    generating = false;
+    syncSetupUI();
+  }
+  if (S.screen !== 'setup') return; // left the screen while generating
+  if (p.difficulty !== st.difficulty) toast(`Couldn't find a ${DIFFICULTIES[st.difficulty].label} puzzle in time; this one is ${DIFFICULTIES[p.difficulty].label}.`, 3500);
   if (S.setupKind === 'solo') {
     disconnect();
     S.role = null;
-    startGame(makeGame({ mode: 'solo', difficulty: st.difficulty, check: st.check }));
+    startGame(makeGame({ mode: 'solo', check: st.check, ...p }));
     return;
   }
   if (!S.connected) return;
-  const game = makeGame({ mode: st.mode, difficulty: st.difficulty, check: st.check });
+  const game = makeGame({ mode: st.mode, check: st.check, ...p });
   startGame(game);
   send({ t: 'start', game: publicGame(game) });
+}
+
+// "Needed: Naked Pair, X-Wing" for the end-of-game summary.
+function techSummary(g) {
+  const names = (g.techs || []).filter((id) => !['full-house', 'naked-single', 'hidden-single'].includes(id))
+    .map((id) => (technique(id) || { name: id }).name);
+  if (!g.techs || !g.techs.length) return '';
+  return `<p class="muted">Strategies this puzzle needed: ${names.length ? [...new Set(names)].join(', ') : 'singles only'}.</p>`;
 }
 
 // ---------------------------------------------------------------- multiplayer session
@@ -1237,6 +1324,7 @@ function wire() {
   codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doJoin(); });
 
   $('tool-undo').addEventListener('click', undo);
+  $('tool-redo').addEventListener('click', redo);
   $('tool-erase').addEventListener('click', erase);
   $('tool-hint').addEventListener('click', hint);
   $('tool-verify').addEventListener('click', runCheck);

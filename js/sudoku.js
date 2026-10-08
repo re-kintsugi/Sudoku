@@ -93,7 +93,7 @@ export function generate(difficulty = 'medium') {
   const target = (DIFFICULTIES[difficulty] || DIFFICULTIES.medium).clues;
   let best = null;
   for (let attempt = 0; attempt < 30; attempt++) {
-    const g = generateOnce(difficulty);
+    const g = { ...generateOnce(target), difficulty };
     const clues = g.puzzle.filter(Boolean).length;
     if (!best || clues < best.clues) best = { ...g, clues };
     if (clues <= target) break;
@@ -102,8 +102,8 @@ export function generate(difficulty = 'medium') {
   return best;
 }
 
-function generateOnce(difficulty) {
-  const target = (DIFFICULTIES[difficulty] || DIFFICULTIES.medium).clues;
+// Remove givens down to `target` (0 = as few as possible) keeping one solution.
+export function generateOnce(target) {
   const solution = new Array(81).fill(0);
   countSolutions(new Array(81).fill(0), 1, solution, true);
 
@@ -122,5 +122,5 @@ function generateOnce(difficulty) {
       clues -= i === j ? 1 : 2;
     }
   }
-  return { puzzle, solution, difficulty };
+  return { puzzle, solution };
 }

@@ -319,3 +319,5 @@ button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulat
 /* Let the board scroll clear of the hint panel. */
 body.sheet-open #screen-game { padding-bottom: 46dvh; }
 .sheet { font-size: 15px; }
+.setup-help { color: var(--muted); font-size: 14px; line-height: 1.4; min-height: 2.8em; }
+#modal-body p.muted { font-size: 14px; }

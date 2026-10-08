@@ -5,7 +5,13 @@ It's a plain static website with no build step, no accounts and no server of its
 
 ## Features
 
-- Puzzles generated in the browser (Easy / Medium / Hard / Expert), each with exactly one solution
+- Puzzles generated in the browser, each with exactly one solution, and **rated by the strategies they need**:
+  - Easy: singles only
+  - Medium: pointing/claiming, naked or hidden pairs and triples
+  - Hard: X-Wing, Swordfish, XY-Wing, Unique Rectangle and similar
+  - Expert: wings, finned fish, chains or forcing chains
+
+  The end-of-game summary lists the strategies the puzzle needed.
 - **Two number rows**: the big bottom row enters numbers, and the small row above it (✎ Notes) adds pencil marks.
   - *Number first*: with no square selected, tap a number in either row to pick it up. It highlights everywhere.
     Every square you tap then gets that number (or note); tap a square again to take it back out.
@@ -22,9 +28,9 @@ It's a plain static website with no build step, no accounts and no server of its
 - **Check** 🔍: marks wrong numbers, squares whose notes have lost the right answer, and notes that clash with a placed number.
   Available in every mode, including races with mistakes hidden.
 - **Strategy guide** 📖 on the home screen and in-game: every technique from Singles to Forcing Chains, grouped by chapter.
-- Undo, erase, a timer, and a count of how many of each number are left
+- Undo and redo (a hint fill-in or note clean-up counts as one step), erase, a timer, and a count of how many of each number are left
 - Your game is saved, so a refresh or closing the tab won't lose it
-- Keyboard support on a computer: 1–9, arrow keys, Shift+1–9 for notes, Backspace, `Z` for undo
+- Keyboard support on a computer: 1–9, arrow keys, Shift+1–9 for notes, Backspace, `Z` for undo, `Y` for redo
 
 ## Two-player modes
 
@@ -77,7 +83,8 @@ That uses the browser's BroadcastChannel instead of WebRTC.
 
 - `index.html`, `css/style.css`: layout and styling (light and dark mode)
 - `js/sudoku.js`: puzzle generator and solver
-- `js/solver.js`: human-style technique finder used for hints
+- `js/solver.js`: human-style technique finder used for hints and difficulty ratings
+- `js/generate.js`: generates puzzles until one matches the chosen difficulty
 - `js/strategies.js`: strategy guide text
 - `js/net.js`: the two-player connection (PeerJS, or BroadcastChannel with `?local`)
 - `js/app.js`: game logic and UI
