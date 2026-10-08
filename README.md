@@ -20,7 +20,7 @@ It's a plain static website with no build step, no accounts and no server of its
   (Hidden Single, Pointing, Naked Pair, X-Wing, XY-Wing, Unique Rectangle, chains…) with a one-line reminder.
   *Show me* highlights the pattern, explains each step and crosses out the notes it removes. *Fill in* places the number.
 - **Check** 🔍: marks wrong numbers, squares whose notes have lost the right answer, and notes that clash with a placed number.
-  Available in solo and shared games, and in races when mistakes are shown.
+  Available in every mode, including races with mistakes hidden.
 - **Strategy guide** 📖 on the home screen and in-game: every technique from Singles to Forcing Chains, grouped by chapter.
 - Undo, erase, a timer, and a count of how many of each number are left
 - Your game is saved, so a refresh or closing the tab won't lose it

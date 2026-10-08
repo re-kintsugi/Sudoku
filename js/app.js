@@ -246,8 +246,7 @@ function render() {
   $('tool-check').disabled = g.mode !== 'solo';
   $('tool-check').classList.toggle('hidden', g.mode === 'shared');
   $('tool-hint').classList.toggle('hidden', g.mode !== 'solo');
-  // In a race with mistakes hidden, checking would give an unfair advantage.
-  $('tool-verify').disabled = g.finished || (g.mode === 'race' && !g.check);
+  $('tool-verify').disabled = g.finished;
   $('tool-undo').disabled = !g.history.length || g.finished;
   document.querySelector('.tools').style.gridTemplateColumns =
     `repeat(${document.querySelectorAll('.tools .tool:not(.hidden)').length}, 1fr)`;
