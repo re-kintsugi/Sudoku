@@ -1397,20 +1397,44 @@ function wire() {
   });
 }
 
-// Older iOS versions still double-tap-zoom despite touch-action. The board and
-// number pads act on pointerdown, so cancelling a quick second touchend there
-// only stops the zoom, never a tap.
+// ---------------------------------------------------------------- iPhone zoom
+// iOS Safari ignores user-scalable=no and, in practice, touch-action too: two
+// taps at a normal pace (not just fast ones) count as a double-tap and zoom
+// the page. On the game screen, cancel the second of any two taps within
+// DOUBLE_TAP_MS. The board and pads act on pointerdown, so they lose nothing;
+// buttons that act on click get the click delivered by hand.
+const DOUBLE_TAP_MS = 600;
 let lastTouchEnd = 0;
 document.addEventListener('touchend', (e) => {
   const now = Date.now();
-  const t = e.target;
-  // isConnected guards against a target that a re-render already removed.
-  const onPad = t.closest && (t.closest('.board, .numpad') || (!t.isConnected && S.screen === 'game'));
-  if (now - lastTouchEnd < 350 && onPad) e.preventDefault();
+  const quick = now - lastTouchEnd < DOUBLE_TAP_MS;
   lastTouchEnd = now;
+  if (!quick || S.screen !== 'game' || e.touches.length) return;
+  e.preventDefault();
+  const t = e.target;
+  if (!t.isConnected || (t.closest && t.closest('.board, .numpad'))) return;
+  const btn = t.closest && t.closest('button, summary, label');
+  if (btn) btn.click();
 }, { passive: false });
-// Block Safari's pinch/zoom gesture events on the game board.
-document.addEventListener('gesturestart', (e) => { if (S.screen === 'game') e.preventDefault(); });
+
+// If the game screen ends up zoomed anyway, snap back once fingers lift.
+// Rewriting the viewport tag makes Safari re-apply initial-scale=1.
+const viewportMeta = document.querySelector('meta[name=viewport]');
+const viewportBase = viewportMeta.content;
+let activeTouches = 0, zoomTimer;
+const trackTouches = (e) => { activeTouches = e.touches.length; };
+['touchstart', 'touchend', 'touchcancel'].forEach((t) => document.addEventListener(t, trackTouches, { passive: true }));
+function resetZoomSoon() {
+  clearTimeout(zoomTimer);
+  zoomTimer = setTimeout(() => {
+    const vv = window.visualViewport;
+    if (!vv || vv.scale <= 1.02 || S.screen !== 'game') return;
+    if (activeTouches) { resetZoomSoon(); return; }
+    viewportMeta.content = viewportBase.replace('initial-scale=1', 'initial-scale=1.0');
+    setTimeout(() => { viewportMeta.content = viewportBase; }, 50);
+  }, 500);
+}
+if (window.visualViewport) window.visualViewport.addEventListener('resize', resetZoomSoon);
 
 buildBoard();
 buildGuide();
