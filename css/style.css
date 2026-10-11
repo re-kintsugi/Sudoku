@@ -51,6 +51,7 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body {
   background: var(--bg);
   color: var(--text);
@@ -69,7 +70,9 @@ button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulat
   min-height: 100%;
   padding: env(safe-area-inset-top) 12px calc(env(safe-area-inset-bottom) + 12px);
 }
-.screen { display: flex; flex-direction: column; min-height: 100dvh; }
+/* #app fills the screen including its padding; screens fill #app. */
+#app { display: flex; flex-direction: column; min-height: 100vh; min-height: 100svh; }
+.screen { display: flex; flex-direction: column; flex: 1 0 auto; }
 
 /* ---------- Home ---------- */
 .home { display: flex; flex-direction: column; gap: 18px; padding: 48px 8px 24px; }
@@ -161,9 +164,12 @@ button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulat
 
 .board-wrap { display: flex; justify-content: center; }
 .board {
-  --size: min(calc(100vw - 24px), 496px, calc(100dvh - 390px));
+  /* svh, not dvh: iPhone Safari's toolbars shrink when the page shifts slightly,
+     which changes dvh and made the whole board jump bigger, like a zoom. */
+  --size: min(calc(100vw - 24px), 496px, calc(100vh - 362px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+  --size: min(calc(100vw - 24px), 496px, calc(100svh - 362px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
   width: var(--size); height: var(--size);
-  min-width: 270px; min-height: 270px;
+  min-width: 220px; min-height: 220px;
   display: grid; grid-template-columns: repeat(9, 1fr); grid-template-rows: repeat(9, 1fr);
   border: 2px solid var(--line-strong); border-radius: 6px; overflow: hidden;
   background: var(--surface);
@@ -364,3 +370,20 @@ html, body, .screen, .board, .cell, .numpad, .tools, .sheet { touch-action: mani
    on every change, and a touch whose target vanishes mid-tap loses the
    touch-action above, so iOS falls back to double-tap zoom. */
 .cell *, .num * { pointer-events: none; }
+
+/* Short screens (e.g. iPhone SE): tighten everything around the board so the
+   game screen fits without scrolling. */
+@media (max-height: 640px) {
+  .board { --size: min(calc(100vw - 24px), 496px, calc(100vh - 318px - env(safe-area-inset-top) - env(safe-area-inset-bottom))); --size: min(calc(100vw - 24px), 496px, calc(100svh - 318px - env(safe-area-inset-top) - env(safe-area-inset-bottom))); }
+  .topbar { min-height: 44px; padding: 2px 0; }
+  .scorebar { min-height: 0; margin-bottom: 6px; }
+  .pcard { padding: 4px 10px; flex-direction: row; align-items: center; justify-content: space-between; }
+  .pcard .pval { font-size: 17px; }
+  .tools { margin: 6px 0 4px; }
+  .tool .ti { font-size: 19px; }
+  .pad-label { display: none; }
+  .num.note { height: 34px; }
+  .notepad { margin-bottom: 5px; }
+  .num { padding: 7px 0 5px; }
+  .num b { font-size: 22px; }
+}
