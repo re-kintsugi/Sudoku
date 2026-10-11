@@ -359,3 +359,8 @@ body.sheet-open #screen-game { padding-bottom: 46dvh; }
 /* iPhone Safari ignores user-scalable=no and zooms on quick double taps.
    manipulation keeps pinch-zoom but turns off double-tap zoom. */
 html, body, .screen, .board, .cell, .numpad, .tools, .sheet { touch-action: manipulation; }
+
+/* Taps must land on the cell/button itself. Their contents are re-rendered
+   on every change, and a touch whose target vanishes mid-tap loses the
+   touch-action above, so iOS falls back to double-tap zoom. */
+.cell *, .num * { pointer-events: none; }

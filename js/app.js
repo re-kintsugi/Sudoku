@@ -1403,9 +1403,14 @@ function wire() {
 let lastTouchEnd = 0;
 document.addEventListener('touchend', (e) => {
   const now = Date.now();
-  if (now - lastTouchEnd < 300 && e.target.closest && e.target.closest('.board, .numpad')) e.preventDefault();
+  const t = e.target;
+  // isConnected guards against a target that a re-render already removed.
+  const onPad = t.closest && (t.closest('.board, .numpad') || (!t.isConnected && S.screen === 'game'));
+  if (now - lastTouchEnd < 350 && onPad) e.preventDefault();
   lastTouchEnd = now;
 }, { passive: false });
+// Block Safari's pinch/zoom gesture events on the game board.
+document.addEventListener('gesturestart', (e) => { if (S.screen === 'game') e.preventDefault(); });
 
 buildBoard();
 buildGuide();
