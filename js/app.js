@@ -1397,6 +1397,16 @@ function wire() {
   });
 }
 
+// Older iOS versions still double-tap-zoom despite touch-action. The board and
+// number pads act on pointerdown, so cancelling a quick second touchend there
+// only stops the zoom, never a tap.
+let lastTouchEnd = 0;
+document.addEventListener('touchend', (e) => {
+  const now = Date.now();
+  if (now - lastTouchEnd < 300 && e.target.closest && e.target.closest('.board, .numpad')) e.preventDefault();
+  lastTouchEnd = now;
+}, { passive: false });
+
 buildBoard();
 buildGuide();
 wire();

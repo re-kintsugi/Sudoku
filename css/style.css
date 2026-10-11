@@ -355,3 +355,7 @@ body.sheet-open #screen-game { padding-bottom: 46dvh; }
 .dg-link { opacity: 0.6; }
 .dg-focus { stroke-width: 2; }
 .dg-target { stroke-width: 2.5; }
+
+/* iPhone Safari ignores user-scalable=no and zooms on quick double taps.
+   manipulation keeps pinch-zoom but turns off double-tap zoom. */
+html, body, .screen, .board, .cell, .numpad, .tools, .sheet { touch-action: manipulation; }
