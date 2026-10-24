@@ -106,6 +106,18 @@ const MAX_PLAYERS = 8;
 // In a race with mistakes hidden, each Check adds this much to your time.
 const CHECK_PENALTY_MS = 30000;
 const checkCosts = (g) => g && g.mode === 'race' && !g.check && !g.finished;
+// In a race with mistakes shown, each wrong number adds this much to your time.
+const MISTAKE_PENALTY_MS = 15000;
+
+// Add race-time penalty and make the clock flash so it's noticed.
+function addPenalty(ms, why) {
+  const g = S.game;
+  g.elapsed += ms;
+  renderTitle();
+  const t = $('timer');
+  t.classList.remove('penalty'); void t.offsetWidth; t.classList.add('penalty');
+  toast(`${why}: +${fmtTime(ms)}`);
+}
 function nameOf(pid) { return pid === S.myId ? myName() : (S.players[pid] && S.players[pid].name) || 'Player'; }
 function colorOf(pid) { return (S.players[pid] && S.players[pid].color) || 0; }
 function hostName() { return S.myId === 'host' ? myName() : nameOf('host'); }
@@ -469,7 +481,11 @@ function enterNumber(i, d) {
     g.values[i] = d;
     g.notes[i] = 0;
     const wrong = d !== g.solution[i];
-    if (g.check && wrong) { g.mistakes++; flash(i, 'bad'); }
+    if (g.check && wrong) {
+      g.mistakes++;
+      flash(i, 'bad');
+      if (g.mode === 'race') addPenalty(MISTAKE_PENALTY_MS, 'Wrong number');
+    }
     // A placed number clears that pencil mark from its row, column and box.
     if (!g.check || !wrong) {
       for (const p of PEERS[i]) {
@@ -697,11 +713,9 @@ function runCheck(paid = false) {
       <p>${g.checks ? `You've used ${g.checks} check${g.checks > 1 ? 's' : ''} so far.` : 'Everyone can see how many checks you use.'}</p>`,
       [{ label: `Check (+${fmtTime(CHECK_PENALTY_MS)})`, cls: 'primary', onClick: () => {
         g.checks = (g.checks || 0) + 1;
-        g.elapsed += CHECK_PENALTY_MS;
-        renderTitle();
+        addPenalty(CHECK_PENALTY_MS, 'Check');
         save();
         sendProgress();
-        toast(`+${fmtTime(CHECK_PENALTY_MS)} added to your time`);
         runCheck(true);
       } },
       { label: 'Cancel', cls: 'link' }]);
@@ -859,6 +873,8 @@ function showRaceResult() {
     val: e.done ? fmtTime(e.time) + (g.check ? ` · ${e.mistakes} ✗` : e.checks ? ` · ${e.checks} 🔍` : '') : e.left ? 'left' : `${Math.round((e.filled / emptyCount(g)) * 100)}% done`,
     win: k === 0 && e.done,
   })));
+  const why = g.check ? `${MISTAKE_PENALTY_MS / 1000} seconds per mistake` : st.some((e) => e.checks) ? `${CHECK_PENALTY_MS / 1000} seconds per check` : '';
+  if (why) body += `<p class="muted">Times include ${why}.</p>`;
   endModal(title, body);
 }
 
@@ -1046,7 +1062,7 @@ function syncSetupUI() {
   $('mistake-help').textContent = shared
     ? 'Always on for shared board — every number is scored the moment it’s placed.'
     : S.setupKind === 'host'
-      ? (st.check ? 'Applies to every player. Wrong numbers turn red straight away.'
+      ? (st.check ? `Applies to every player. Wrong numbers turn red straight away${st.mode === 'race' ? ` and add ${MISTAKE_PENALTY_MS / 1000} seconds to your time` : ''}.`
         : `Off for every player. Check still works but adds ${CHECK_PENALTY_MS / 1000} seconds to your time.`)
       : 'Wrong numbers turn red straight away. You can switch this during the game.';
   $('difficulty-help').textContent = DIFFICULTY_HELP[st.difficulty];

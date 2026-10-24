@@ -424,3 +424,6 @@ html, body, .screen, .board, .cell, .numpad, .tools, .sheet { touch-action: mani
 .roster .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--pc, var(--me)); flex: none; }
 .roster .dot.me { background: var(--me); }
 #join-roster { margin-top: 4px; }
+.timer.penalty { animation: penalty 1.2s ease-out; }
+@keyframes penalty { 0%, 40% { color: var(--bad); transform: scale(1.25); } 100% { color: var(--muted); transform: none; } }
+.timer { display: inline-block; }

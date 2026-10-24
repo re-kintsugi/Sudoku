@@ -42,7 +42,8 @@ Each player gets their own colour.
 
 - **Race**: everyone gets the same puzzle on their own board and sees everyone's progress.
   When the first player finishes, the others are told and can keep going; the results list the full finishing order.
-  The host's "Show mistakes" setting applies to every player. With mistakes hidden, each 🔍 Check adds 30 seconds to your time.
+  The host's "Show mistakes" setting applies to every player. With mistakes shown, each wrong number adds 15 seconds
+  to your time; with mistakes hidden, nothing gives them away, but each 🔍 Check adds 30 seconds.
 - **Shared board**: one board everyone fills in together. Each player's numbers and selected square show in their colour.
   A correct number earns its value in points (placing a 7 = +7). A wrong number loses that many (−7) and doesn't stay on the board.
   When the board is full, the final leaderboard shows everyone's score.
