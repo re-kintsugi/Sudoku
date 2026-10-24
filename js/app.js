@@ -103,6 +103,9 @@ function myName() { return S.name.trim() || 'Player'; }
 function isMulti() { return S.game && S.game.mode !== 'solo'; }
 
 const MAX_PLAYERS = 8;
+// In a race with mistakes hidden, each Check adds this much to your time.
+const CHECK_PENALTY_MS = 30000;
+const checkCosts = (g) => g && g.mode === 'race' && !g.check && !g.finished;
 function nameOf(pid) { return pid === S.myId ? myName() : (S.players[pid] && S.players[pid].name) || 'Player'; }
 function colorOf(pid) { return (S.players[pid] && S.players[pid].color) || 0; }
 function hostName() { return S.myId === 'host' ? myName() : nameOf('host'); }
@@ -150,6 +153,7 @@ function makeGame({ mode, difficulty, check, puzzle, solution, id, techs }) {
     redo: [],
     mistakes: 0,
     hints: 0,
+    checks: 0,           // race with mistakes hidden: paid checks
     scores: {},          // shared board: pid -> points
     mistakesBy: {},      // shared board: pid -> wrong placements
     elapsed: 0,
@@ -297,6 +301,7 @@ function render() {
   $('tool-check').classList.toggle('hidden', g.mode === 'shared');
   $('tool-hint').classList.toggle('hidden', g.mode !== 'solo');
   $('tool-verify').disabled = g.finished;
+  $('verify-cost').textContent = checkCosts(g) ? '+' + CHECK_PENALTY_MS / 1000 + 's' : '';
   $('tool-undo').disabled = !g.history.length || g.finished;
   $('tool-redo').disabled = !(g.redo && g.redo.length) || g.finished;
   document.querySelector('.tools').style.gridTemplateColumns =
@@ -341,7 +346,7 @@ function renderScorebar() {
       if (g.mode === 'race') {
         const pr = me ? myProgress() : g.progress[pid] || { filled: 0, mistakes: 0, done: false };
         return pcard({ id: 'pc-' + pid, cls, offline: !me && offline, name: label, value: Math.round((pr.filled / total) * 100) + '%',
-          sub: pr.done ? 'Done ' + fmtTime(pr.time) : plural(pr.mistakes, 'mistake'), pct: (pr.filled / total) * 100 });
+          sub: pr.done ? 'Done ' + fmtTime(pr.time) : g.check ? plural(pr.mistakes, 'mistake') : plural(pr.checks || 0, 'check'), pct: (pr.filled / total) * 100 });
       }
       return pcard({ id: 'pc-' + pid, cls, offline: !me && offline, name: label, value: g.scores[pid] || 0, sub: plural(g.mistakesBy[pid] || 0, 'mistake') });
     }).join('');
@@ -683,9 +688,25 @@ function fillHint() {
   checkSoloComplete();
 }
 
-function runCheck() {
+function runCheck(paid = false) {
   const g = S.game;
   if (!g) return;
+  if (checkCosts(g) && paid !== true) {
+    const secs = CHECK_PENALTY_MS / 1000;
+    modal(`Check for ${secs} seconds?`, `<p>Mistakes are hidden in this race, so checking adds <b>${secs} seconds</b> to your time.</p>
+      <p>${g.checks ? `You've used ${g.checks} check${g.checks > 1 ? 's' : ''} so far.` : 'Everyone can see how many checks you use.'}</p>`,
+      [{ label: `Check (+${fmtTime(CHECK_PENALTY_MS)})`, cls: 'primary', onClick: () => {
+        g.checks = (g.checks || 0) + 1;
+        g.elapsed += CHECK_PENALTY_MS;
+        renderTitle();
+        save();
+        sendProgress();
+        toast(`+${fmtTime(CHECK_PENALTY_MS)} added to your time`);
+        runCheck(true);
+      } },
+      { label: 'Cancel', cls: 'link' }]);
+    return;
+  }
   hideSheet();
   const mk = emptyMarks();
   for (const c of wrongCells(g)) mk.wrong.add(c);
@@ -835,7 +856,7 @@ function showRaceResult() {
     : `<p>You finished ${ordinal(myPlace)} of ${st.length}.</p>`;
   body += resultRows(st.map((e, k) => ({
     name: `${k + 1}. ${nameOf(e.pid)}${e.pid === S.myId ? ' (you)' : ''}`,
-    val: e.done ? fmtTime(e.time) + ` · ${e.mistakes} ✗` : e.left ? 'left' : `${Math.round((e.filled / emptyCount(g)) * 100)}% done`,
+    val: e.done ? fmtTime(e.time) + (g.check ? ` · ${e.mistakes} ✗` : e.checks ? ` · ${e.checks} 🔍` : '') : e.left ? 'left' : `${Math.round((e.filled / emptyCount(g)) * 100)}% done`,
     win: k === 0 && e.done,
   })));
   endModal(title, body);
@@ -935,7 +956,7 @@ function applyCell(msg) {
 
 function myProgress() {
   const g = S.game;
-  return { filled: filledCount(g), mistakes: g.mistakes, done: g.finished, time: g.finishTime };
+  return { filled: filledCount(g), mistakes: g.mistakes, checks: g.checks || 0, done: g.finished, time: g.finishTime };
 }
 
 function sendProgress() {
@@ -950,7 +971,7 @@ function onProgress(pid, msg) {
   const g = S.game;
   if (!g || g.mode !== 'race' || msg.id !== g.id || pid === S.myId) return;
   const was = g.progress[pid];
-  g.progress[pid] = { filled: msg.filled, mistakes: msg.mistakes, done: msg.done, time: msg.time };
+  g.progress[pid] = { filled: msg.filled, mistakes: msg.mistakes, checks: msg.checks || 0, done: msg.done, time: msg.time };
   render();
   save();
   if (!msg.done || (was && was.done)) return;
@@ -1024,7 +1045,10 @@ function syncSetupUI() {
   $('mistake-toggle').disabled = shared;
   $('mistake-help').textContent = shared
     ? 'Always on for shared board — every number is scored the moment it’s placed.'
-    : S.setupKind === 'host' ? 'Applies to every player. Wrong numbers turn red straight away.' : 'Wrong numbers turn red straight away. You can switch this during the game.';
+    : S.setupKind === 'host'
+      ? (st.check ? 'Applies to every player. Wrong numbers turn red straight away.'
+        : `Off for every player. Check still works but adds ${CHECK_PENALTY_MS / 1000} seconds to your time.`)
+      : 'Wrong numbers turn red straight away. You can switch this during the game.';
   $('difficulty-help').textContent = DIFFICULTY_HELP[st.difficulty];
   const btn = $('btn-start');
   if (generating) return;

@@ -26,7 +26,8 @@ It's a plain static website with no build step, no accounts and no server of its
   (Hidden Single, Pointing, Naked Pair, X-Wing, XY-Wing, Unique Rectangle, chains…) with a one-line reminder.
   *Show me* highlights the pattern, explains each step and crosses out the notes it removes. *Fill in* places the number.
 - **Check** 🔍: marks wrong numbers, squares whose notes have lost the right answer, and notes that clash with a placed number.
-  Available in every mode, including races with mistakes hidden.
+  Free in solo, the shared board and races with mistakes shown. In a race with mistakes hidden it costs 30 seconds:
+  it asks first, adds the time to your clock, and everyone can see how many checks each player used.
 - **Strategy guide** 📖 on the home screen and in-game: every technique from Singles to Forcing Chains, grouped by chapter,
   each with an example board diagram (real positions found by the solver, or hand-drawn for the techniques it doesn't detect).
 - Undo and redo (a hint fill-in or note clean-up counts as one step), erase, a timer, and a count of how many of each number are left
@@ -41,7 +42,7 @@ Each player gets their own colour.
 
 - **Race**: everyone gets the same puzzle on their own board and sees everyone's progress.
   When the first player finishes, the others are told and can keep going; the results list the full finishing order.
-  The host's "Show mistakes" setting applies to every player.
+  The host's "Show mistakes" setting applies to every player. With mistakes hidden, each 🔍 Check adds 30 seconds to your time.
 - **Shared board**: one board everyone fills in together. Each player's numbers and selected square show in their colour.
   A correct number earns its value in points (placing a 7 = +7). A wrong number loses that many (−7) and doesn't stay on the board.
   When the board is full, the final leaderboard shows everyone's score.
