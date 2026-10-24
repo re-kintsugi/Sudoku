@@ -12,7 +12,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.svg">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="css/style.css?v=5">
+  <link rel="stylesheet" href="css/style.css?v=6">
 </head>
 <body>
   <div id="app">
@@ -31,11 +31,11 @@
         </div>
         <div class="stack">
           <button class="btn primary" data-go="solo">Play solo</button>
-          <button class="btn" data-go="host">Host a 2‑player game</button>
+          <button class="btn" data-go="host">Host a multiplayer game</button>
           <button class="btn" data-go="join">Join a game</button>
           <button class="btn" data-go="guide">📖 Strategy guide</button>
         </div>
-        <p class="hint">Two players: one person taps <b>Host</b> and reads out the 4‑letter code, the other taps <b>Join</b> and types it in.</p>
+        <p class="hint">Multiplayer (2–8 players): one person taps <b>Host</b> and reads out the 4‑letter code, everyone else taps <b>Join</b> and types it in.</p>
       </div>
     </section>
 
@@ -51,6 +51,7 @@
           <div class="code-label">Game code</div>
           <div class="code" id="host-code">····</div>
           <div class="status" id="host-status">Setting up…</div>
+          <ul class="roster" id="host-roster"></ul>
         </div>
 
         <div id="mode-group" class="group hidden">
@@ -58,11 +59,11 @@
           <div class="choice" id="mode-choice">
             <button data-value="race" class="selected">
               <b>Race</b>
-              <small>Same puzzle, your own boards. First to finish wins.</small>
+              <small>Same puzzle, everyone on their own board. First to finish wins.</small>
             </button>
             <button data-value="shared">
               <b>Shared board</b>
-              <small>One board together. Score the number you place; mistakes cost that much.</small>
+              <small>One board for everyone. Score the number you place; mistakes cost that much.</small>
             </button>
           </div>
         </div>
@@ -107,6 +108,7 @@
         </label>
         <button class="btn primary big" id="btn-join">Join</button>
         <div class="status" id="join-status"></div>
+        <ul class="roster" id="join-roster"></ul>
       </div>
     </section>
 
@@ -178,6 +180,6 @@
   </div>
 
   <script src="vendor/peerjs.min.js"></script>
-  <script type="module" src="js/app.js?v=5"></script>
+  <script type="module" src="js/app.js?v=6"></script>
 </body>
 </html>

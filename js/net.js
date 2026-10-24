@@ -1,7 +1,8 @@
-// Two-player connection. Uses PeerJS (WebRTC) so phones talk to each other
-// directly; PeerJS's free public server is only used to find each other.
-// Add ?local to the URL to use BroadcastChannel instead (two tabs, same browser)
-// which is handy for testing without a network.
+// Multiplayer connection. The host's phone is the hub: every guest connects to
+// it, and the app on the host relays what others need to see. Uses PeerJS
+// (WebRTC) so phones talk directly; PeerJS's free public server is only used
+// to find each other. Add ?local to the URL to use BroadcastChannel instead
+// (several tabs in one browser), which is handy for testing without a network.
 
 const PREFIX = 'kintsugi-sudoku-v1-';
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -18,16 +19,19 @@ export function normalizeCode(code) {
 
 const useLocal = new URLSearchParams(location.search).has('local');
 
-// Events: onMessage(msg), onStatus(status, detail)
-// status: 'waiting' (host registered), 'connected', 'disconnected', 'error'
+// onMessage(msg, key): key identifies the sending connection (host side only).
+// onStatus(status, detail, key):
+//   host:  'waiting' (registered), 'peer-open' / 'peer-close' (key), 'error'
+//   guest: 'connected', 'disconnected', 'error'
 export class Connection {
   constructor(role, { onMessage, onStatus }) {
     this.role = role; // 'host' | 'guest'
     this.onMessage = onMessage;
     this.onStatus = onStatus;
-    this.connected = false;
+    this.connected = false; // guest: linked to the host
     this.code = null;
     this.closed = false;
+    this.conns = new Map(); // host: key -> { conn, lastSeen }
   }
 
   start(code) {
@@ -36,12 +40,23 @@ export class Connection {
     else this._startPeer();
   }
 
-  send(msg) {
-    if (!this.connected) return false;
+  // Guest: send to the host. Host: send to one connection (key) or everyone.
+  send(msg, key) {
     try {
-      if (useLocal) this.bc.postMessage({ from: this.role, msg });
-      else this.conn.send(msg);
-      return true;
+      if (this.role === 'guest') {
+        if (!this.connected) return false;
+        if (useLocal) this.bc.postMessage({ from: this.key, to: 'host', kind: 'msg', msg });
+        else this.conn.send(msg);
+        return true;
+      }
+      if (useLocal) {
+        if (key && !this.conns.has(key)) return false;
+        this.bc.postMessage({ from: 'host', to: key || '*', kind: 'msg', msg });
+        return true;
+      }
+      const targets = key ? [this.conns.get(key)].filter(Boolean) : [...this.conns.values()];
+      for (const t of targets) { try { t.conn.send(msg); } catch {} }
+      return targets.length > 0;
     } catch (e) {
       console.warn('send failed', e);
       return false;
@@ -52,15 +67,23 @@ export class Connection {
     this.closed = true;
     this.connected = false;
     clearInterval(this.pingTimer);
+    clearTimeout(this.openTimer);
+    try { this.bc && this.bc.postMessage({ from: this.key, to: this.role === 'host' ? '*' : 'host', kind: 'bye' }); } catch {}
     try { this.bc && this.bc.close(); } catch {}
+    for (const { conn } of this.conns.values()) { try { conn.close(); } catch {} }
+    this.conns.clear();
     try { this.conn && this.conn.close(); } catch {}
     try { this.peer && this.peer.destroy(); } catch {}
   }
 
-  // Guest: try to re-establish a dropped connection.
+  // Guest: try to re-establish a dropped connection. Host: re-register with
+  // the matchmaking server if that link dropped.
   reconnect() {
     if (this.closed) return;
-    if (useLocal) { this.bc.postMessage({ from: this.role, hello: true }); return; }
+    if (useLocal) {
+      if (this.role === 'guest') this.bc.postMessage({ from: this.key, to: 'host', kind: 'hello' });
+      return;
+    }
     if (this.role === 'guest') {
       if (this.peer && !this.peer.destroyed && !this.peer.disconnected) this._connectToHost();
       else { try { this.peer && this.peer.destroy(); } catch {} this._startPeer(); }
@@ -75,26 +98,46 @@ export class Connection {
     this.onStatus(v ? 'connected' : 'disconnected');
   }
 
-  // ---- BroadcastChannel transport ----
+  _peerOpen(key, conn) {
+    const had = this.conns.has(key);
+    this.conns.set(key, { conn, lastSeen: Date.now() });
+    if (!had) this.onStatus('peer-open', null, key);
+  }
+
+  _peerClose(key) {
+    const c = this.conns.get(key);
+    if (!c) return;
+    this.conns.delete(key);
+    try { c.conn && c.conn.close(); } catch {}
+    this.onStatus('peer-close', null, key);
+  }
+
+  // ---- BroadcastChannel transport (testing: one tab per player) ----
   _startLocal() {
+    this.key = this.role === 'host' ? 'host' : 'tab-' + Math.random().toString(36).slice(2, 8);
     this.bc = new BroadcastChannel(PREFIX + this.code);
     this.bc.onmessage = (e) => {
       const d = e.data;
-      if (d.from === this.role) return;
-      if (d.hello) {
-        if (this.role === 'host') this.bc.postMessage({ from: this.role, helloAck: true });
-        this._setConnected(true);
-        return;
+      if (d.from === this.key) return;
+      if (this.role === 'host') {
+        if (d.to !== 'host') return;
+        if (d.kind === 'hello') {
+          this.bc.postMessage({ from: 'host', to: d.from, kind: 'ack' });
+          this._peerOpen(d.from, null);
+        } else if (d.kind === 'bye') this._peerClose(d.from);
+        else if (d.kind === 'msg' && this.conns.has(d.from)) this.onMessage(d.msg, d.from);
+      } else {
+        if (d.from !== 'host' || (d.to !== this.key && d.to !== '*')) return;
+        if (d.kind === 'ack') this._setConnected(true);
+        else if (d.kind === 'bye') this._setConnected(false);
+        else if (d.kind === 'msg' && this.connected) this.onMessage(d.msg);
       }
-      if (d.helloAck) { this._setConnected(true); return; }
-      if (d.bye) { this._setConnected(false); return; }
-      if (d.msg) this.onMessage(d.msg);
     };
     window.addEventListener('beforeunload', () => {
-      try { this.bc.postMessage({ from: this.role, bye: true }); } catch {}
+      try { this.bc.postMessage({ from: this.key, to: this.role === 'host' ? '*' : 'host', kind: 'bye' }); } catch {}
     });
     if (this.role === 'host') this.onStatus('waiting');
-    else this.bc.postMessage({ from: this.role, hello: true });
+    else this.bc.postMessage({ from: this.key, to: 'host', kind: 'hello' });
   }
 
   // ---- PeerJS transport ----
@@ -106,17 +149,24 @@ export class Connection {
     this.peer = peer;
 
     peer.on('open', () => {
-      if (this.role === 'host') this.onStatus('waiting');
+      if (this.role === 'host') { this.onStatus('waiting'); this._startPing(); }
       else this._connectToHost();
     });
     peer.on('connection', (conn) => {
       if (this.role !== 'host') return;
-      // A new connection replaces the old one (e.g. the guest refreshed).
-      if (this.conn && this.conn !== conn) { try { this.conn.close(); } catch {} }
-      this._wire(conn);
+      const key = conn.peer + ':' + conn.connectionId;
+      conn.on('open', () => this._peerOpen(key, conn));
+      conn.on('data', (msg) => {
+        const c = this.conns.get(key);
+        if (c) c.lastSeen = Date.now();
+        if (msg && msg.t === 'ping') return;
+        if (c) this.onMessage(msg, key);
+      });
+      conn.on('close', () => this._peerClose(key));
+      conn.on('error', () => this._peerClose(key));
     });
     peer.on('disconnected', () => {
-      // Lost the signalling server; existing data connection may still work.
+      // Lost the signalling server; existing data connections may still work.
       if (!this.closed && !peer.destroyed) setTimeout(() => { if (!peer.destroyed) peer.reconnect(); }, 1000);
     });
     peer.on('error', (err) => {
@@ -124,7 +174,7 @@ export class Connection {
       if (type === 'unavailable-id') this.onStatus('error', 'code-taken');
       else if (type === 'peer-unavailable') this.onStatus('error', 'No game found with that code. Check the code and that the host is still on the game screen.');
       else if (type === 'network' || type === 'server-error' || type === 'socket-error' || type === 'socket-closed') {
-        if (!this.connected) this.onStatus('error', 'Could not reach the matchmaking server. Check your internet connection.');
+        if (!this.connected && !this.conns.size) this.onStatus('error', 'Could not reach the matchmaking server. Check your internet connection.');
       } else if (type === 'browser-incompatible') this.onStatus('error', 'This browser does not support WebRTC.');
       else console.warn('peer error', err);
     });
@@ -132,17 +182,6 @@ export class Connection {
 
   _connectToHost() {
     const conn = this.peer.connect(PREFIX + this.code, { reliable: true, serialization: 'json' });
-    this._wire(conn);
-    // If the connection never opens, report it.
-    clearTimeout(this.openTimer);
-    this.openTimer = setTimeout(() => {
-      if (!conn.open && this.conn === conn && !this.closed) {
-        this.onStatus('error', 'Could not connect to the host. Make sure you are both online and try again.');
-      }
-    }, 15000);
-  }
-
-  _wire(conn) {
     this.conn = conn;
     conn.on('open', () => {
       if (this.conn !== conn) return;
@@ -158,15 +197,30 @@ export class Connection {
     });
     conn.on('close', () => { if (this.conn === conn) this._setConnected(false); });
     conn.on('error', () => { if (this.conn === conn) this._setConnected(false); });
+    // If the connection never opens, report it.
+    clearTimeout(this.openTimer);
+    this.openTimer = setTimeout(() => {
+      if (!conn.open && this.conn === conn && !this.closed) {
+        this.onStatus('error', 'Could not connect to the host. Make sure you are both online and try again.');
+      }
+    }, 15000);
   }
 
   // Phones can silently drop WebRTC (screen lock); ping so we notice.
   _startPing() {
     clearInterval(this.pingTimer);
     this.pingTimer = setInterval(() => {
-      if (!this.connected) return;
-      try { this.conn.send({ t: 'ping' }); } catch {}
-      if (Date.now() - this.lastSeen > 12000) this._setConnected(false);
+      const now = Date.now();
+      if (this.role === 'guest') {
+        if (!this.connected) return;
+        try { this.conn.send({ t: 'ping' }); } catch {}
+        if (now - this.lastSeen > 12000) this._setConnected(false);
+        return;
+      }
+      for (const [key, c] of this.conns) {
+        try { c.conn.send({ t: 'ping' }); } catch {}
+        if (now - c.lastSeen > 12000) this._peerClose(key);
+      }
     }, 3000);
   }
 }

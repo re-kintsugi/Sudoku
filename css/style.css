@@ -387,3 +387,40 @@ html, body, .screen, .board, .cell, .numpad, .tools, .sheet { touch-action: mani
   .num { padding: 7px 0 5px; }
   .num b { font-size: 22px; }
 }
+
+/* ---------- Multiplayer: player colours, roster, compact scorebar ---------- */
+:root {
+  --p0: #e0662b; --p1: #16a34a; --p2: #9333ea; --p3: #db2777;
+  --p4: #0d9488; --p5: #b45309; --p6: #dc2626; --p7: #64748b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --p0: #ff925c; --p1: #4ade80; --p2: #c084fc; --p3: #f472b6;
+    --p4: #2dd4bf; --p5: #fbbf24; --p6: #f87171; --p7: #94a3b8;
+  }
+}
+.cell.own-c0 { color: var(--p0); } .cell.own-c1 { color: var(--p1); } .cell.own-c2 { color: var(--p2); } .cell.own-c3 { color: var(--p3); }
+.cell.own-c4 { color: var(--p4); } .cell.own-c5 { color: var(--p5); } .cell.own-c6 { color: var(--p6); } .cell.own-c7 { color: var(--p7); }
+.cell[class*="cur-c"]::after { content: ""; position: absolute; inset: 1px; border: 2.5px solid var(--cur); border-radius: 3px; pointer-events: none; }
+.cell.cur-c0 { --cur: var(--p0); } .cell.cur-c1 { --cur: var(--p1); } .cell.cur-c2 { --cur: var(--p2); } .cell.cur-c3 { --cur: var(--p3); }
+.cell.cur-c4 { --cur: var(--p4); } .cell.cur-c5 { --cur: var(--p5); } .cell.cur-c6 { --cur: var(--p6); } .cell.cur-c7 { --cur: var(--p7); }
+.pc-c0 { --pc: var(--p0); } .pc-c1 { --pc: var(--p1); } .pc-c2 { --pc: var(--p2); } .pc-c3 { --pc: var(--p3); }
+.pc-c4 { --pc: var(--p4); } .pc-c5 { --pc: var(--p5); } .pc-c6 { --pc: var(--p6); } .pc-c7 { --pc: var(--p7); }
+.pcard[class*="pc-c"] { border-left-color: var(--pc); }
+.pcard[class*="pc-c"] .bar i { background: var(--pc); }
+
+/* More than two players: one scrollable row of smaller cards keeps the board big. */
+.scorebar.compact { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.scorebar.compact::-webkit-scrollbar { display: none; }
+.scorebar.compact .pcard { flex: 0 0 auto; min-width: 104px; max-width: 150px; padding: 5px 9px; gap: 2px; }
+.scorebar.compact .pcard .pname { font-size: 12px; }
+.scorebar.compact .pcard .pval { font-size: 16px; }
+.scorebar.compact .pcard .pval small { font-size: 11px; }
+
+.roster { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; text-align: left; }
+.roster li { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; }
+.roster li small { color: var(--muted); font-weight: 400; }
+.roster li.offline { opacity: 0.5; }
+.roster .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--pc, var(--me)); flex: none; }
+.roster .dot.me { background: var(--me); }
+#join-roster { margin-top: 4px; }

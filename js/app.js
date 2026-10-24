@@ -31,8 +31,10 @@ const S = {
   role: null,          // null (solo) | 'host' | 'guest'
   conn: null,
   code: null,
-  connected: false,
-  oppName: 'Opponent',
+  connected: false,    // guest: linked to the host; host: at least one guest online
+  myId: null,          // 'host', or this guest's player id
+  players: {},         // pid -> { name, color, connected, left }
+  connPid: new Map(),  // host: connection key -> pid
   setupKind: 'solo',
   setup: Object.assign({ mode: 'race', difficulty: 'medium', check: true }, store.get('sudoku-setup', {})),
   game: null,
@@ -43,7 +45,7 @@ const S = {
   marks: null,         // board highlights from a hint or check
   hint: null,          // { steps, headline, shown }
   guideReturn: 'home',
-  oppCursor: -1,
+  cursors: {},         // pid -> selected square (shared board)
   screen: 'home',
   lastTick: 0,
   reconnectTries: 0,
@@ -98,12 +100,38 @@ function fmtTime(ms) {
 }
 
 function myName() { return S.name.trim() || 'Player'; }
-function oppRole() { return S.role === 'host' ? 'guest' : 'host'; }
 function isMulti() { return S.game && S.game.mode !== 'solo'; }
 
-function send(msg) {
-  if (S.conn) return S.conn.send(msg);
-  return false;
+const MAX_PLAYERS = 8;
+function nameOf(pid) { return pid === S.myId ? myName() : (S.players[pid] && S.players[pid].name) || 'Player'; }
+function colorOf(pid) { return (S.players[pid] && S.players[pid].color) || 0; }
+function hostName() { return S.myId === 'host' ? myName() : nameOf('host'); }
+// Everyone else in the game, in the order they joined.
+function otherIds() {
+  return Object.keys(S.players).filter((p) => p !== S.myId).sort((a, b) => colorOf(a) - colorOf(b));
+}
+function isOnline(pid) {
+  if (pid === S.myId) return true;
+  if (S.role === 'guest' && !S.connected) return false;
+  const p = S.players[pid];
+  return !!p && p.connected && !p.left;
+}
+function ordinal(n) { return n + (n % 10 === 1 && n % 100 !== 11 ? 'st' : n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : 'th'); }
+
+// Guest: send to the host. Host: send to every guest (optionally skipping one).
+function send(msg, exceptPid) {
+  if (!S.conn) return false;
+  if (S.role !== 'host') return S.conn.send(msg);
+  if (!exceptPid) return S.conn.send(msg);
+  for (const [key, pid] of S.connPid) if (pid !== exceptPid) S.conn.send(msg, key);
+  return true;
+}
+function sendTo(pid, msg) {
+  for (const [key, p] of S.connPid) if (p === pid) S.conn.send(msg, key);
+}
+function sendCursor(i) {
+  if (S.role === 'host') send({ t: 'cursor', pid: 'host', i });
+  else send({ t: 'cursor', i });
 }
 
 // ---------------------------------------------------------------- game model
@@ -122,13 +150,12 @@ function makeGame({ mode, difficulty, check, puzzle, solution, id, techs }) {
     redo: [],
     mistakes: 0,
     hints: 0,
-    scores: { host: 0, guest: 0 },
-    mistakesBy: { host: 0, guest: 0 },
+    scores: {},          // shared board: pid -> points
+    mistakesBy: {},      // shared board: pid -> wrong placements
     elapsed: 0,
     finished: false,
     finishTime: null,
-    opp: { filled: 0, mistakes: 0, done: false, time: null },
-    oppDoneSeen: false,
+    progress: {},        // race: pid -> { filled, mistakes, done, time } for the other players
   };
 }
 
@@ -138,6 +165,7 @@ function publicGame(g) {
     id: g.id, mode: g.mode, difficulty: g.difficulty, check: g.check, techs: g.techs,
     puzzle: g.puzzle, solution: g.solution,
     values: g.values, owner: g.owner, scores: g.scores, mistakesBy: g.mistakesBy,
+    progress: g.mode === 'race' ? { ...g.progress, host: myProgress() } : {},
     elapsed: g.elapsed, finished: g.mode === 'shared' ? g.finished : false,
   };
 }
@@ -159,7 +187,7 @@ function save() {
     if (g.finished) store.del(SOLO_KEY);
     else store.set(SOLO_KEY, { game: g, savedAt: Date.now() });
   } else if (S.role && S.code) {
-    store.set(MP_KEY, { role: S.role, code: S.code, oppName: S.oppName, game: g, savedAt: Date.now() });
+    store.set(MP_KEY, { role: S.role, code: S.code, myId: S.myId, players: S.players, game: g, savedAt: Date.now() });
   }
 }
 
@@ -198,6 +226,13 @@ function render() {
   if (!g) return;
   const sel = S.sel;
   const hd = S.hlDigit;
+  // Other players' selected squares (shared board), drawn in their colour.
+  const cursorAt = new Map();
+  if (g.mode === 'shared') {
+    for (const [pid, ci] of Object.entries(S.cursors)) {
+      if (pid !== S.myId && ci >= 0 && isOnline(pid) && !cursorAt.has(ci)) cursorAt.set(ci, 'cur-c' + colorOf(pid));
+    }
+  }
   for (let i = 0; i < 81; i++) {
     const c = cells[i];
     const v = g.values[i];
@@ -207,8 +242,10 @@ function render() {
     cl.toggle('peer', sel >= 0 && i !== sel && (ROW[i] === ROW[sel] || COL[i] === COL[sel] || BOX[i] === BOX[sel]));
     cl.toggle('same', !!hd && v === hd && i !== sel);
     cl.toggle('wrong', g.mode !== 'shared' && g.check && !!v && !g.puzzle[i] && v !== g.solution[i]);
-    cl.toggle('opp-owned', g.mode === 'shared' && !!g.owner[i] && g.owner[i] !== S.role);
-    cl.toggle('opp-cursor', g.mode === 'shared' && S.oppCursor === i && S.connected);
+    const own = g.mode === 'shared' && g.owner[i] && g.owner[i] !== S.myId ? 'own-c' + colorOf(g.owner[i]) : '';
+    if ((c.dataset.own || '') !== own) { if (c.dataset.own) cl.remove(c.dataset.own); if (own) cl.add(own); c.dataset.own = own; }
+    const cur = cursorAt.get(i) || '';
+    if ((c.dataset.cur || '') !== cur) { if (c.dataset.cur) cl.remove(c.dataset.cur); if (cur) cl.add(cur); c.dataset.cur = cur; }
     const mk = S.marks;
     cl.toggle('hint-area', !!mk && mk.area.has(i));
     cl.toggle('hint-focus', !!mk && mk.focus.has(i));
@@ -276,8 +313,8 @@ function renderTitle() {
   $('timer').textContent = fmtTime(g.finished && g.finishTime != null ? g.finishTime : g.elapsed);
 }
 
-function pcard({ name, value, sub, pct, opp, offline, id }) {
-  return `<div class="pcard ${opp ? 'opp' : ''} ${offline ? 'offline' : ''}" id="${id}">
+function pcard({ name, value, sub, pct, cls, offline, id }) {
+  return `<div class="pcard ${cls || ''} ${offline ? 'offline' : ''}" id="${id}">
     <div class="pname">${esc(name)}</div>
     <div class="pval"><span>${value}</span><small>${sub}</small></div>
     ${pct != null ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ''}
@@ -288,31 +325,40 @@ function renderScorebar() {
   const g = S.game;
   const bar = $('scorebar');
   let html = '';
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
   if (g.mode === 'solo') {
-    html = pcard({ id: 'pc-me', name: 'Mistakes', value: g.mistakes, sub: g.hints ? `${g.hints} hint${g.hints > 1 ? 's' : ''}` : (g.check ? '' : 'checking off') });
-  } else if (g.mode === 'race') {
-    const total = emptyCount(g);
-    const mine = filledCount(g);
-    const op = g.opp;
-    html = pcard({ id: 'pc-me', name: myName() + ' (you)', value: Math.round((mine / total) * 100) + '%', sub: g.finished ? 'Done ' + fmtTime(g.finishTime) : `${g.mistakes} mistake${g.mistakes === 1 ? '' : 's'}`, pct: (mine / total) * 100 })
-      + pcard({ id: 'pc-opp', opp: true, offline: !S.connected, name: S.oppName + (S.connected ? '' : ' · offline'), value: Math.round((op.filled / total) * 100) + '%', sub: op.done ? 'Done ' + fmtTime(op.time) : `${op.mistakes} mistake${op.mistakes === 1 ? '' : 's'}`, pct: (op.filled / total) * 100 });
+    html = pcard({ id: 'pc-me', name: 'Mistakes', value: g.mistakes, sub: g.hints ? plural(g.hints, 'hint') : (g.check ? '' : 'checking off') });
   } else {
-    const me = S.role, op = oppRole();
-    html = pcard({ id: 'pc-me', name: myName() + ' (you)', value: g.scores[me], sub: `${g.mistakesBy[me]} mistake${g.mistakesBy[me] === 1 ? '' : 's'}` })
-      + pcard({ id: 'pc-opp', opp: true, offline: !S.connected, name: S.oppName + (S.connected ? '' : ' · offline'), value: g.scores[op], sub: `${g.mistakesBy[op]} mistake${g.mistakesBy[op] === 1 ? '' : 's'}` });
+    // Me first, then everyone else in join order. Players who left stay if they scored.
+    const ids = [S.myId, ...otherIds().filter((p) => !S.players[p].left || p in g.scores || g.progress[p])];
+    const total = emptyCount(g);
+    html = ids.map((pid) => {
+      const me = pid === S.myId;
+      const p = S.players[pid] || {};
+      const offline = !isOnline(pid);
+      const label = me ? myName() + ' (you)' : nameOf(pid) + (p.left ? ' · left' : offline ? ' · offline' : '');
+      const cls = me ? 'me' : 'pc-c' + colorOf(pid);
+      if (g.mode === 'race') {
+        const pr = me ? myProgress() : g.progress[pid] || { filled: 0, mistakes: 0, done: false };
+        return pcard({ id: 'pc-' + pid, cls, offline: !me && offline, name: label, value: Math.round((pr.filled / total) * 100) + '%',
+          sub: pr.done ? 'Done ' + fmtTime(pr.time) : plural(pr.mistakes, 'mistake'), pct: (pr.filled / total) * 100 });
+      }
+      return pcard({ id: 'pc-' + pid, cls, offline: !me && offline, name: label, value: g.scores[pid] || 0, sub: plural(g.mistakesBy[pid] || 0, 'mistake') });
+    }).join('');
+    bar.classList.toggle('compact', ids.length > 2);
   }
   if (bar.dataset.html !== html) { bar.innerHTML = html; bar.dataset.html = html; }
 }
 
-function showDelta(role, amount) {
-  const card = $(role === S.role ? 'pc-me' : 'pc-opp');
+function showDelta(pid, amount) {
+  const card = $('pc-' + pid);
   if (!card) return;
   const el = document.createElement('span');
   el.className = 'delta ' + (amount >= 0 ? 'plus' : 'minus');
   el.textContent = (amount >= 0 ? '+' : '−') + Math.abs(amount);
   card.querySelector('.pval small').replaceWith(el);
   // the next scorebar render puts the normal text back
-  setTimeout(() => { $('scorebar').dataset.html = ''; renderScorebar(); }, 1200);
+  setTimeout(() => { $('scorebar').dataset.html = ''; if (S.game) renderScorebar(); }, 1200);
 }
 
 function flash(i, kind, ghost) {
@@ -353,7 +399,7 @@ function selectCell(i) {
   }
   S.sel = i;
   S.hlDigit = g.values[i] || 0;
-  if (g.mode === 'shared') send({ t: 'cursor', i });
+  if (g.mode === 'shared') sendCursor(i);
   render();
 }
 
@@ -383,7 +429,7 @@ function tapNumber(d, mode) {
     S.sel = -1;
     S.pick = { d, mode };
     S.hlDigit = d;
-    if (g.mode === 'shared') send({ t: 'cursor', i: -1 });
+    if (g.mode === 'shared') sendCursor(-1);
     render();
     return;
   }
@@ -396,7 +442,7 @@ function tapNumber(d, mode) {
     S.pick = { d, mode };
     S.hlDigit = d;
     S.sel = -1;
-    if (g.mode === 'shared') send({ t: 'cursor', i: -1 });
+    if (g.mode === 'shared') sendCursor(-1);
   }
   render();
 }
@@ -405,7 +451,7 @@ function enterNumber(i, d) {
   const g = S.game;
   if (g.mode === 'shared') {
     if (S.role === 'host') hostPlace(i, d, 'host');
-    else if (!send({ t: 'place', i, d })) toast('Not connected to ' + S.oppName);
+    else if (!send({ t: 'place', i, d })) toast(`Not connected to ${hostName()}'s game`);
     render();
     return;
   }
@@ -781,20 +827,25 @@ function checkSoloComplete() {
 
 function showRaceResult() {
   const g = S.game;
-  const op = g.opp;
-  let title, body;
-  if (op.done && op.time < g.finishTime) {
-    title = `${S.oppName} wins`;
-    body = `<p>You finished too — ${fmtTime(g.finishTime - op.time)} behind.</p>`;
-  } else {
-    title = 'You win! 🏆';
-    body = op.done ? `<p>${esc(S.oppName)} also finished, ${fmtTime(op.time - g.finishTime)} behind.</p>` : `<p>You finished first.</p>`;
-  }
-  body += resultRows([
-    { name: myName(), val: fmtTime(g.finishTime) + ` · ${g.mistakes} ✗`, win: !(op.done && op.time < g.finishTime) },
-    { name: S.oppName, val: op.done ? fmtTime(op.time) + ` · ${op.mistakes} ✗` : 'still playing', win: op.done && op.time < g.finishTime },
-  ]);
+  const st = raceStandings(g);
+  const myPlace = st.findIndex((e) => e.pid === S.myId) + 1;
+  const title = myPlace === 1 ? 'You win! 🏆' : `${nameOf(st[0].pid)} wins`;
+  let body = myPlace === 1
+    ? (st.length > 1 ? '<p>You finished first.</p>' : '')
+    : `<p>You finished ${ordinal(myPlace)} of ${st.length}.</p>`;
+  body += resultRows(st.map((e, k) => ({
+    name: `${k + 1}. ${nameOf(e.pid)}${e.pid === S.myId ? ' (you)' : ''}`,
+    val: e.done ? fmtTime(e.time) + ` · ${e.mistakes} ✗` : e.left ? 'left' : `${Math.round((e.filled / emptyCount(g)) * 100)}% done`,
+    win: k === 0 && e.done,
+  })));
   endModal(title, body);
+}
+
+// Finished players by time, then everyone else by how much they've filled in.
+function raceStandings(g) {
+  const ids = [S.myId, ...otherIds().filter((p) => !S.players[p].left || g.progress[p])];
+  return ids.map((pid) => ({ pid, left: !!(S.players[pid] && S.players[pid].left), ...(pid === S.myId ? myProgress() : g.progress[pid] || { filled: 0, mistakes: 0, done: false, time: null }) }))
+    .sort((a, b) => (a.done !== b.done ? (a.done ? -1 : 1) : a.done ? a.time - b.time : b.filled - a.filled));
 }
 
 function resultRows(rows) {
@@ -807,7 +858,7 @@ function endModal(title, body) {
   if (S.role === 'host') {
     actions.push({ label: 'New game', cls: 'primary', onClick: () => backToLobby() });
   } else {
-    body += `<p style="margin-top:10px">${esc(S.oppName)} can start the next game.</p>`;
+    body += `<p style="margin-top:10px">${esc(hostName())} can start the next game.</p>`;
   }
   actions.push({ label: 'Look at board', onClick: () => {} });
   actions.push({ label: 'Leave', cls: 'link', onClick: () => leaveMultiplayer() });
@@ -822,12 +873,17 @@ function finishShared() {
   S.sel = -1; S.hlDigit = 0; S.pick = null;
   render();
   save();
-  const me = g.scores[S.role], op = g.scores[oppRole()];
-  const title = me > op ? 'You win! 🏆' : me < op ? `${S.oppName} wins` : "It's a tie!";
-  const body = `<p>Board complete in ${fmtTime(g.finishTime)}.</p>` + resultRows([
-    { name: myName(), val: `${me} pts · ${g.mistakesBy[S.role]} ✗`, win: me > op },
-    { name: S.oppName, val: `${op} pts · ${g.mistakesBy[oppRole()]} ✗`, win: op > me },
-  ]);
+  const ids = [...new Set([S.myId, ...otherIds(), ...Object.keys(g.scores)])].filter((p) => p === S.myId || (S.players[p] && (!S.players[p].left || p in g.scores)));
+  const st = ids.map((pid) => ({ pid, score: g.scores[pid] || 0 })).sort((a, b) => b.score - a.score);
+  const top = st[0].score;
+  const winners = st.filter((e) => e.score === top);
+  const title = winners.length > 1 ? (winners.some((e) => e.pid === S.myId) ? "It's a tie!" : `Tie: ${winners.map((e) => nameOf(e.pid)).join(' & ')}`)
+    : winners[0].pid === S.myId ? 'You win! 🏆' : `${nameOf(winners[0].pid)} wins`;
+  const body = `<p>Board complete in ${fmtTime(g.finishTime)}.</p>` + resultRows(st.map((e, k) => ({
+    name: `${k + 1}. ${nameOf(e.pid)}${e.pid === S.myId ? ' (you)' : ''}`,
+    val: `${e.score} pts · ${g.mistakesBy[e.pid] || 0} ✗`,
+    win: e.score === top,
+  })));
   endModal(title, body);
 }
 
@@ -837,12 +893,13 @@ function hostPlace(i, d, by) {
   const g = S.game;
   if (!g || g.mode !== 'shared') return;
   if (g.finished || g.values[i] || d < 1 || d > 9) {
-    send({ t: 'cell', i, d: g.values[i], by: g.owner[i], correct: !!g.values[i], stale: true, scores: g.scores, mistakesBy: g.mistakesBy });
+    // Someone else got there first: tell the player who tried what's really there.
+    if (by !== 'host') sendTo(by, { t: 'cell', i, d: g.values[i], by: g.owner[i], correct: !!g.values[i], stale: true, scores: g.scores, mistakesBy: g.mistakesBy });
     return;
   }
   const correct = g.solution[i] === d;
-  if (correct) { g.values[i] = d; g.owner[i] = by; g.scores[by] += d; }
-  else { g.scores[by] -= d; g.mistakesBy[by]++; }
+  if (correct) { g.values[i] = d; g.owner[i] = by; g.scores[by] = (g.scores[by] || 0) + d; }
+  else { g.scores[by] = (g.scores[by] || 0) - d; g.mistakesBy[by] = (g.mistakesBy[by] || 0) + 1; }
   const msg = { t: 'cell', i, d, by, correct, scores: g.scores, mistakesBy: g.mistakesBy };
   send(msg);
   applyCell(msg);
@@ -869,37 +926,41 @@ function applyCell(msg) {
   render();
   showDelta(by, correct ? d : -d);
   flash(i, correct ? 'good' : 'bad', correct ? null : d);
-  if (!correct && by !== S.role) toast(`${S.oppName} tried a wrong ${d}: −${d}`);
+  if (!correct && by !== S.myId) toast(`${nameOf(by)} tried a wrong ${d}: −${d}`);
   save();
   if (g.values.every((v) => v)) finishShared();
 }
 
 // ---------------------------------------------------------------- race progress
 
+function myProgress() {
+  const g = S.game;
+  return { filled: filledCount(g), mistakes: g.mistakes, done: g.finished, time: g.finishTime };
+}
+
 function sendProgress() {
   const g = S.game;
   if (!g || g.mode !== 'race') return;
-  send({ t: 'progress', id: g.id, filled: filledCount(g), mistakes: g.mistakes, done: g.finished, time: g.finishTime });
+  const msg = { t: 'progress', id: g.id, ...myProgress() };
+  if (S.role === 'host') send({ ...msg, pid: 'host' });
+  else send(msg);
 }
 
-function onOppProgress(msg) {
+function onProgress(pid, msg) {
   const g = S.game;
-  if (!g || g.mode !== 'race' || msg.id !== g.id) return;
-  g.opp = { filled: msg.filled, mistakes: msg.mistakes, done: msg.done, time: msg.time };
+  if (!g || g.mode !== 'race' || msg.id !== g.id || pid === S.myId) return;
+  const was = g.progress[pid];
+  g.progress[pid] = { filled: msg.filled, mistakes: msg.mistakes, done: msg.done, time: msg.time };
   render();
   save();
-  if (msg.done && !g.oppDoneSeen) {
-    g.oppDoneSeen = true;
-    save();
-    if (!g.finished) {
-      modal(`${S.oppName} finished!`, `<p>${esc(S.oppName)} solved it in <b>${fmtTime(msg.time)}</b>.</p><p>Keep going to finish your board, or call it here.</p>`,
-        [{ label: 'Keep playing', cls: 'primary' },
-          ...(S.role === 'host' ? [{ label: 'New game', onClick: () => backToLobby() }] : []),
-          { label: 'Leave', cls: 'link', onClick: () => leaveMultiplayer() }]);
-    } else {
-      showRaceResult();
-    }
-  }
+  if (!msg.done || (was && was.done)) return;
+  const place = raceStandings(g).findIndex((e) => e.pid === pid) + 1;
+  if (g.finished) { toast(`${nameOf(pid)} finished ${ordinal(place)}`); return; }
+  if (place !== 1) { toast(`${nameOf(pid)} finished ${ordinal(place)}`); return; }
+  modal(`${nameOf(pid)} finished first!`, `<p>${esc(nameOf(pid))} solved it in <b>${fmtTime(msg.time)}</b>.</p><p>Keep going to finish your board, or call it here.</p>`,
+    [{ label: 'Keep playing', cls: 'primary' },
+      ...(S.role === 'host' ? [{ label: 'New game', onClick: () => backToLobby() }] : []),
+      { label: 'Leave', cls: 'link', onClick: () => leaveMultiplayer() }]);
 }
 
 // ---------------------------------------------------------------- timer
@@ -928,7 +989,7 @@ function startGame(game) {
   S.hlDigit = 0;
   S.pick = null;
   hideSheet();
-  S.oppCursor = -1;
+  S.cursors = {};
   S.fullWarned = false;
   S.lastTick = Date.now();
   closeModal();
@@ -963,13 +1024,14 @@ function syncSetupUI() {
   $('mistake-toggle').disabled = shared;
   $('mistake-help').textContent = shared
     ? 'Always on for shared board — every number is scored the moment it’s placed.'
-    : S.setupKind === 'host' ? 'Applies to both players. Wrong numbers turn red straight away.' : 'Wrong numbers turn red straight away. You can switch this during the game.';
+    : S.setupKind === 'host' ? 'Applies to every player. Wrong numbers turn red straight away.' : 'Wrong numbers turn red straight away. You can switch this during the game.';
   $('difficulty-help').textContent = DIFFICULTY_HELP[st.difficulty];
   const btn = $('btn-start');
   if (generating) return;
   if (S.setupKind === 'host') {
-    btn.disabled = !S.connected;
-    btn.textContent = S.connected ? 'Start game' : 'Waiting for player…';
+    const n = onlineGuests().length;
+    btn.disabled = !n;
+    btn.textContent = n ? `Start game (${n + 1} players)` : 'Waiting for players…';
   } else {
     btn.disabled = false;
     btn.textContent = 'Start';
@@ -980,7 +1042,7 @@ function syncSetupUI() {
 let generating = false;
 async function onStartPressed() {
   const st = S.setup;
-  if (generating || (S.setupKind === 'host' && !S.connected)) return;
+  if (generating || (S.setupKind === 'host' && !onlineGuests().length)) return;
   const btn = $('btn-start');
   generating = true;
   btn.disabled = true;
@@ -1000,7 +1062,7 @@ async function onStartPressed() {
     startGame(makeGame({ mode: 'solo', check: st.check, ...p }));
     return;
   }
-  if (!S.connected) return;
+  if (!onlineGuests().length) return;
   const game = makeGame({ mode: st.mode, check: st.check, ...p });
   startGame(game);
   send({ t: 'start', game: publicGame(game) });
@@ -1015,45 +1077,55 @@ function techSummary(g) {
 }
 
 // ---------------------------------------------------------------- multiplayer session
+// The host's phone is the hub. Guests send their moves to the host, which
+// referees the shared board and passes progress, moves and cursors on to
+// everyone else. Each player has an id ('host' for the host) and a colour.
 
-function connHandlers() {
-  return { onMessage, onStatus };
-}
-
-function startHost(code, resume = false) {
+function startHost(code, resume = false, savedPlayers = null) {
   disconnect();
   S.role = 'host';
+  S.myId = 'host';
   S.code = code || randomCode();
+  S.connPid = new Map();
+  S.players = {};
+  if (savedPlayers) {
+    for (const [pid, p] of Object.entries(savedPlayers)) S.players[pid] = { ...p, connected: pid === 'host' };
+  }
+  S.players.host = { name: myName(), color: 0, connected: true, left: false };
   S.connected = false;
   $('host-code').textContent = S.code;
   setHostStatus('Connecting…');
+  renderRoster();
   S.conn = new Connection('host', {
     onMessage,
-    onStatus: (status, detail) => {
+    onStatus: (status, detail, key) => {
       if (status === 'error' && detail === 'code-taken') {
-        if (resume) { toast('Could not reclaim the old game code — starting a fresh one.'); startHost(null); }
-        else startHost(null);
+        if (resume) toast('Could not reclaim the old game code — starting a fresh one.');
+        startHost(null, false, S.players);
         return;
       }
-      onStatus(status, detail);
+      onStatus(status, detail, key);
     },
   });
   S.conn.start(S.code);
 }
 
-function startGuest(code) {
+function startGuest(code, pid = null, savedPlayers = null) {
   disconnect();
   S.role = 'guest';
+  S.myId = pid || 'p' + Math.random().toString(36).slice(2, 10);
   S.code = code;
+  S.players = savedPlayers ? { ...savedPlayers } : {};
   S.connected = false;
   S.reconnectTries = 0;
-  S.conn = new Connection('guest', connHandlers());
+  S.conn = new Connection('guest', { onMessage, onStatus });
   S.conn.start(code);
 }
 
 function disconnect() {
   if (S.conn) { S.conn.close(); S.conn = null; }
   S.connected = false;
+  S.connPid = new Map();
   clearTimeout(S.reconnectTimer);
 }
 
@@ -1068,36 +1140,86 @@ function setJoinStatus(text, cls = '') {
   el.className = 'status ' + cls;
 }
 
+function onlineGuests() {
+  return Object.entries(S.players).filter(([pid, p]) => pid !== 'host' && p.connected && !p.left).map(([pid]) => pid);
+}
+
+// Lowest colour not used by anyone still in the game.
+function nextColor() {
+  const used = new Set(Object.values(S.players).filter((p) => !p.left).map((p) => p.color));
+  for (let c = 0; c < MAX_PLAYERS; c++) if (!used.has(c)) return c;
+  return 0;
+}
+
+// Host: tell everyone who's in the game, then refresh our own screens.
+function pushRoster() {
+  if (S.role === 'host') send({ t: 'roster', players: S.players });
+  playersChanged();
+}
+
+function playersChanged() {
+  if (S.role === 'host') S.connected = onlineGuests().length > 0;
+  renderRoster();
+  if (S.role === 'host' && S.screen === 'setup') updateHostStatus();
+  if (S.role === 'guest' && S.screen === 'join' && S.connected) showGuestWaiting();
+  if (S.game && S.screen === 'game') render();
+  updateBanner();
+  save();
+}
+
+function renderRoster() {
+  const ids = Object.keys(S.players).filter((p) => !S.players[p].left).sort((a, b) => colorOf(a) - colorOf(b));
+  const html = ids.map((pid) => {
+    const p = S.players[pid];
+    const tags = [pid === 'host' ? 'host' : '', pid === S.myId ? 'you' : '', !isOnline(pid) ? 'offline' : ''].filter(Boolean).join(', ');
+    return `<li class="${isOnline(pid) ? '' : 'offline'}"><i class="dot ${pid === S.myId ? 'me' : 'pc-c' + p.color}"></i>${esc(nameOf(pid))}${tags ? ` <small>(${tags})</small>` : ''}</li>`;
+  }).join('');
+  for (const id of ['host-roster', 'join-roster']) $(id).innerHTML = html;
+}
+
 function updateHostStatus() {
-  if (S.connected) setHostStatus(`${S.oppName} has joined! Pick a mode and start.`, 'ok');
-  else setHostStatus('Waiting for the other player to join with this code…');
+  const n = onlineGuests().length;
+  if (n) setHostStatus(`${n} player${n > 1 ? 's' : ''} joined. Pick a mode and start when everyone's in.`, 'ok');
+  else setHostStatus('Waiting for players to join with this code…');
   syncSetupUI();
 }
 
-function onStatus(status, detail) {
-  if (status === 'waiting') {
-    if (S.role === 'host') updateHostStatus();
-  } else if (status === 'connected') {
+function onStatus(status, detail, key) {
+  if (S.role === 'host') {
+    if (status === 'waiting') updateHostStatus();
+    else if (status === 'peer-close') onGuestGone(key);
+    else if (status === 'error') setHostStatus(detail, 'err');
+    // 'peer-open': nothing to do until the guest says hello.
+    updateBanner();
+    return;
+  }
+  if (status === 'connected') {
     S.connected = true;
     S.reconnectTries = 0;
-    if (S.role === 'guest') send({ t: 'hello', name: myName(), gameId: S.game && S.game.id });
+    send({ t: 'hello', pid: S.myId, name: myName(), gameId: S.game && S.game.id });
   } else if (status === 'disconnected') {
     S.connected = false;
-    if (S.role === 'host') updateHostStatus();
-    if (S.role === 'guest') {
-      setJoinStatus('Connection lost. Trying to reconnect…');
-      scheduleReconnect();
-    }
+    setJoinStatus('Connection lost. Trying to reconnect…');
+    scheduleReconnect();
     if (S.game) render();
   } else if (status === 'error') {
-    if (S.role === 'host') setHostStatus(detail, 'err');
-    else {
-      setJoinStatus(detail, 'err');
-      $('btn-join').disabled = false;
-      if (S.screen === 'game') scheduleReconnect();
-    }
+    setJoinStatus(detail, 'err');
+    $('btn-join').disabled = false;
+    if (S.screen === 'game') scheduleReconnect();
   }
   updateBanner();
+}
+
+function onGuestGone(key) {
+  const pid = S.connPid.get(key);
+  S.connPid.delete(key);
+  if (!pid || [...S.connPid.values()].includes(pid)) return;
+  const p = S.players[pid];
+  if (!p || p.left) return;
+  p.connected = false;
+  delete S.cursors[pid];
+  toast(`${p.name} disconnected`);
+  pushRoster();
 }
 
 function scheduleReconnect() {
@@ -1110,36 +1232,89 @@ function scheduleReconnect() {
   }, Math.min(2000 + S.reconnectTries * 1000, 8000));
 }
 
+// Only guests lose the game when their link drops; the host shows who's offline instead.
 function updateBanner() {
-  const inSession = S.role && S.conn && (S.screen === 'game' || (S.screen === 'join' && S.game));
-  const show = inSession && !S.connected;
+  const show = S.role === 'guest' && S.conn && !S.connected && (S.screen === 'game' || (S.screen === 'join' && S.game));
   $('conn-banner').classList.toggle('hidden', !show);
-  if (show) {
-    $('conn-text').textContent = S.role === 'host' ? `${S.oppName} disconnected — waiting for them` : `Lost connection to ${S.oppName}`;
-    $('btn-reconnect').classList.toggle('hidden', S.role === 'host');
+  if (show) $('conn-text').textContent = `Lost connection to ${hostName()}'s game`;
+}
+
+function onMessage(msg, key) {
+  if (!msg || !msg.t) return;
+  if (S.role === 'host') onHostMessage(msg, key);
+  else onGuestMessage(msg);
+}
+
+const cleanName = (n, fallback) => String(n || fallback).slice(0, 16);
+
+// Host <- guest
+function onHostMessage(msg, key) {
+  const g = S.game;
+  if (msg.t === 'hello') {
+    const pid = String(msg.pid || key).replace(/[^a-z0-9-]/gi, '').slice(0, 24) || key;
+    const existing = S.players[pid];
+    const inGame = Object.values(S.players).filter((p) => !p.left).length;
+    if ((!existing || existing.left) && inGame >= MAX_PLAYERS) { S.conn.send({ t: 'full' }, key); return; }
+    S.connPid.set(key, pid);
+    S.players[pid] = { name: cleanName(msg.name, 'Player'), color: existing && !existing.left ? existing.color : nextColor(), connected: true, left: false };
+    S.conn.send({ t: 'welcome', you: pid }, key);
+    pushRoster();
+    if (g && g.mode !== 'solo') {
+      S.conn.send({ t: 'sync', game: publicGame(g) }, key);
+      toast(`${S.players[pid].name} ${existing ? 'is back' : 'joined'}`);
+    }
+    return;
+  }
+  const pid = S.connPid.get(key);
+  if (!pid) return; // not introduced yet
+  switch (msg.t) {
+    case 'progress':
+      if (!g || g.mode !== 'race' || msg.id !== g.id) return;
+      send({ ...msg, pid }, pid);
+      onProgress(pid, msg);
+      break;
+    case 'place':
+      hostPlace(msg.i, msg.d, pid);
+      break;
+    case 'cursor':
+      S.cursors[pid] = msg.i;
+      send({ t: 'cursor', pid, i: msg.i }, pid);
+      if (g) render();
+      break;
+    case 'name':
+      S.players[pid].name = cleanName(msg.name, S.players[pid].name);
+      pushRoster();
+      break;
+    case 'leave': {
+      const p = S.players[pid];
+      p.left = true;
+      p.connected = false;
+      delete S.cursors[pid];
+      toast(`${p.name} left the game`);
+      pushRoster();
+      break;
+    }
   }
 }
 
-function onMessage(msg) {
-  if (!msg || !msg.t) return;
+// Guest <- host
+function onGuestMessage(msg) {
   const g = S.game;
   switch (msg.t) {
-    case 'hello': // host <- guest
-      S.oppName = (msg.name || 'Guest').slice(0, 16);
-      send({ t: 'welcome', name: myName() });
-      if (g && g.mode !== 'solo' && !(g.mode === 'race' && g.finished && g.opp.done)) {
-        send({ t: 'sync', game: publicGame(g) });
-        if (g.mode === 'race') sendProgress();
-        toast(`${S.oppName} is connected`);
-      }
-      updateHostStatus();
+    case 'welcome':
+      S.myId = msg.you || S.myId;
+      if (S.screen === 'join' || !S.game) showGuestWaiting();
+      else toast(`Reconnected to ${hostName()}'s game`);
       if (g) render();
       break;
-    case 'welcome': // guest <- host
-      S.oppName = (msg.name || 'Host').slice(0, 16);
-      if (S.screen === 'join' || !S.game) showGuestWaiting();
-      else toast(`Connected to ${S.oppName}`);
-      if (g) render();
+    case 'roster':
+      S.players = msg.players || {};
+      playersChanged();
+      break;
+    case 'full':
+      setJoinStatus(`That game is full (${MAX_PLAYERS} players).`, 'err');
+      $('btn-join').disabled = false;
+      disconnect();
       break;
     case 'start':
       onGameFromHost(msg.game, true);
@@ -1148,36 +1323,27 @@ function onMessage(msg) {
       onGameFromHost(msg.game, false);
       break;
     case 'lobby':
-      if (S.role === 'guest') {
-        closeModal();
-        S.game = null;
-        store.del(MP_KEY);
-        show('join');
-        showGuestWaiting();
-        toast(`${S.oppName} is setting up a new game`);
-      }
+      closeModal();
+      S.game = null;
+      store.del(MP_KEY);
+      showGuestWaiting();
+      toast(`${hostName()} is setting up a new game`);
       break;
     case 'progress':
-      onOppProgress(msg);
-      break;
-    case 'place':
-      if (S.role === 'host') hostPlace(msg.i, msg.d, 'guest');
+      onProgress(msg.pid, msg);
       break;
     case 'cell':
-      if (S.role === 'guest') applyCell(msg);
+      applyCell(msg);
       break;
     case 'cursor':
-      S.oppCursor = msg.i;
+      if (msg.pid === S.myId) break;
+      S.cursors[msg.pid] = msg.i;
       if (g) render();
       break;
-    case 'name':
-      S.oppName = (msg.name || S.oppName).slice(0, 16);
-      if (g) render();
-      break;
-    case 'leave':
+    case 'leave': // the host ended the game
       store.del(MP_KEY);
       disconnect();
-      modal(`${S.oppName} left`, `<p>${esc(S.oppName)} has left the game.</p>`, [{ label: 'Menu', cls: 'primary', onClick: () => { S.role = null; S.game = null; show('home'); } }]);
+      modal('Game over', `<p>${esc(hostName())} ended the game.</p>`, [{ label: 'Menu', cls: 'primary', onClick: () => { S.role = null; S.game = null; show('home'); } }]);
       updateBanner();
       break;
   }
@@ -1185,12 +1351,8 @@ function onMessage(msg) {
 
 function onGameFromHost(pg, fresh) {
   const local = S.game;
-  let g;
-  if (!fresh && local && local.id === pg.id) {
-    g = local; // keep our own board (race) and our notes
-  } else {
-    g = makeGame({ ...pg });
-  }
+  const same = !fresh && local && local.id === pg.id;
+  const g = same ? local : makeGame({ ...pg }); // a reconnect keeps our own board and notes
   if (pg.mode === 'shared') {
     g.values = pg.values.slice();
     g.owner = pg.owner.slice();
@@ -1198,10 +1360,13 @@ function onGameFromHost(pg, fresh) {
     g.mistakesBy = { ...pg.mistakesBy };
     g.finished = pg.finished;
     for (let i = 0; i < 81; i++) if (g.values[i]) g.notes[i] = 0;
-    if (fresh || !local || local.id !== pg.id) g.elapsed = pg.elapsed || 0;
   }
-  if (g === local) {
-    S.connected && sendProgress();
+  g.progress = { ...(pg.progress || {}) };
+  delete g.progress[S.myId];
+  // Joining a game already under way: start the clock where everyone else is.
+  if (!same) g.elapsed = pg.elapsed || 0;
+  if (same) {
+    if (S.connected) sendProgress();
     render();
     save();
     return;
@@ -1215,13 +1380,15 @@ function showGuestWaiting() {
   $('join-code').value = S.code || '';
   $('join-code').disabled = true;
   $('btn-join').classList.add('hidden');
-  setJoinStatus(`Connected to ${S.oppName}! Waiting for them to start the game…`, 'ok');
+  setJoinStatus(`Connected to ${hostName()}'s game! Waiting for them to start…`, 'ok');
+  renderRoster();
 }
 
 function resetJoinScreen() {
   $('join-code').disabled = false;
   $('btn-join').classList.remove('hidden');
   $('btn-join').disabled = false;
+  $('join-roster').innerHTML = '';
   setJoinStatus('');
 }
 
@@ -1229,6 +1396,9 @@ function backToLobby() {
   send({ t: 'lobby' });
   S.game = null;
   store.del(MP_KEY);
+  // Drop players who left so their colours are free again.
+  for (const [pid, p] of Object.entries(S.players)) if (p.left) delete S.players[pid];
+  pushRoster();
   openSetup('host');
 }
 
@@ -1266,9 +1436,10 @@ function refreshResume() {
   const box = $('resume-box');
   const mp = store.get(MP_KEY);
   const solo = store.get(SOLO_KEY);
-  if (mp && Date.now() - mp.savedAt < MP_MAX_AGE && mp.game && !(mp.game.finished)) {
+  if (mp && Date.now() - mp.savedAt < MP_MAX_AGE && mp.game && !(mp.game.finished) && mp.myId) {
     box.classList.remove('hidden');
-    $('btn-resume').textContent = `Rejoin game with ${mp.oppName} (code ${mp.code})`;
+    const host = mp.players && mp.players.host ? mp.players.host.name : 'the host';
+    $('btn-resume').textContent = mp.role === 'host' ? `Resume hosting (code ${mp.code})` : `Rejoin ${host}'s game (code ${mp.code})`;
     $('btn-resume').onclick = () => resumeMultiplayer(mp);
     $('btn-discard').onclick = () => { store.del(MP_KEY); refreshResume(); };
   } else if (solo && solo.game && !solo.game.finished) {
@@ -1282,12 +1453,8 @@ function refreshResume() {
 }
 
 function resumeMultiplayer(mp) {
-  S.oppName = mp.oppName || 'Opponent';
-  if (mp.role === 'host') {
-    startHost(mp.code, true);
-  } else {
-    startGuest(mp.code);
-  }
+  if (mp.role === 'host') startHost(mp.code, true, mp.players);
+  else startGuest(mp.code, mp.myId, mp.players);
   startGame(mp.game);
   updateBanner();
 }
@@ -1300,7 +1467,8 @@ function wire() {
   nameInput.addEventListener('input', () => {
     S.name = nameInput.value.slice(0, 16);
     store.set('sudoku-name', S.name);
-    send({ t: 'name', name: myName() });
+    if (S.role === 'host' && S.players.host) { S.players.host.name = myName(); pushRoster(); }
+    else if (S.role === 'guest') send({ t: 'name', name: myName() });
   });
 
   document.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => {
@@ -1365,13 +1533,13 @@ function wire() {
     const g = S.game;
     if (!g || g.mode === 'solo') { show('home'); return; }
     if (S.role === 'host') {
-      modal('Leave this game?', '<p>You can start a new game with the same player, or leave altogether.</p>', [
+      modal('Leave this game?', '<p>You can start a new game with the same players, or end it for everyone.</p>', [
         { label: 'New game', cls: 'primary', onClick: () => backToLobby() },
-        { label: 'Leave', onClick: () => leaveMultiplayer() },
+        { label: 'End game for everyone', onClick: () => leaveMultiplayer() },
         { label: 'Cancel', cls: 'link' },
       ]);
     } else {
-      modal('Leave this game?', `<p>${esc(S.oppName)} will be told you left.</p>`, [
+      modal('Leave this game?', '<p>The other players will be told you left.</p>', [
         { label: 'Leave', cls: 'primary', onClick: () => leaveMultiplayer() },
         { label: 'Cancel', cls: 'link' },
       ]);
@@ -1392,7 +1560,7 @@ function wire() {
     const inside = e.composedPath().some((el) => el instanceof Element && el.matches('.board, .numpad, .pad-label, .tools, .modal, .banner, .topbar, .sheet'));
     if (inside) return;
     S.sel = -1; S.hlDigit = 0; S.pick = null;
-    if (S.game.mode === 'shared') send({ t: 'cursor', i: -1 });
+    if (S.game.mode === 'shared') sendCursor(-1);
     render();
   });
 }
